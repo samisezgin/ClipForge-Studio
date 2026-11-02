@@ -166,7 +166,10 @@ public final class MainView {
         (controller.settings().darkTheme() ? dark : light).setSelected(true);
         dark.setOnAction(e -> onThemeChange.accept(true));
         light.setOnAction(e -> onThemeChange.accept(false));
-        view.getItems().addAll(language, new SeparatorMenuItem(), dark, light);
+        javafx.scene.control.CheckMenuItem watch = new javafx.scene.control.CheckMenuItem(Messages.get("menu.view.watch"));
+        watch.setSelected(controller.watchFolders());
+        watch.setOnAction(e -> controller.setWatchFolders(watch.isSelected()));
+        view.getItems().addAll(language, new SeparatorMenuItem(), dark, light, new SeparatorMenuItem(), watch);
 
         Menu tools = new Menu(Messages.get("menu.tools"));
         tools.getItems().add(item("menu.tools.ffmpeg", null, this::chooseFfmpeg));

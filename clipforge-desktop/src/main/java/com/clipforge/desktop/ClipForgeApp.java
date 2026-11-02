@@ -91,6 +91,7 @@ public class ClipForgeApp extends Application {
     public void stop() {
         if (controller != null) {
             controller.saveNow();
+            controller.shutdown();
         }
     }
 

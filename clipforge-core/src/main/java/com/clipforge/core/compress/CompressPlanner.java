@@ -23,8 +23,18 @@ public final class CompressPlanner {
         int dot = name.lastIndexOf('.');
         String stem = dot > 0 ? name.substring(0, dot) : name;
         Path out = OutputNaming.unique(outputDir, stem + "_" + options.profile().shortName() + ".mp4", reserved);
-        return new CompressSpec(List.of(CompressInput.of(file, media)), out.toString(), options,
+        // recording start: container creation time, otherwise file time minus duration (cameras close files at the end)
+        long start = media.creationTime() != null ? media.creationTime().toEpochMilli() : modifiedMinusDuration(file, media);
+        return new CompressSpec(List.of(CompressInput.of(file, media, start)), out.toString(), options,
                 media.duration().toMillis(), sizeBytes, media.hasAudio());
+    }
+
+    private static long modifiedMinusDuration(Path file, MediaInfo media) {
+        try {
+            return java.nio.file.Files.getLastModifiedTime(file).toMillis() - media.duration().toMillis();
+        } catch (java.io.IOException e) {
+            return 0;
+        }
     }
 
     /**
@@ -36,7 +46,8 @@ public final class CompressPlanner {
         MergePlanner.requireCompatible(clips);
         String base = OutputNaming.baseName(clips, options.profile().shortName(), "mp4");
         Path out = OutputNaming.unique(outputDir, base, reserved);
-        return new CompressSpec(clips.stream().map(c -> CompressInput.of(c.path(), c.media())).toList(),
+        return new CompressSpec(clips.stream().map(c -> CompressInput.of(c.path(), c.media(),
+                        c.start().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli())).toList(),
                 out.toString(), options,
                 clips.stream().mapToLong(c -> c.duration().toMillis()).sum(),
                 clips.stream().mapToLong(Clip::size).sum(),

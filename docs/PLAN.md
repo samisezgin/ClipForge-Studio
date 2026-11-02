@@ -71,7 +71,15 @@ Original plan:
   with `-stream_loop -1`. No `-shortest` (it would cut the video); `apad` + `atrim` instead.
 - Optional: mix original audio quietly under the music (`amix`).
 
-## Phase 4 — Telemetry and extras (v0.4.0)
+## Phase 4 — Telemetry and extras (v0.4.0) — done
+Implemented: `core.telemetry` with parsers for SigmaStar metadata (32-byte packets: lat/lon doubles, camera clock;
+verified on the real footage: clock only, no GPS fix), GoPro GPMF (GPS5/GPS9 + SCAL + GPSU), DJI `.SRT` sidecars and
+ISO 6709 location tags; GPX/CSV export; Telemetry tab with an offline route preview, speed chart and an OpenStreetMap
+page opened in the browser (no embedded WebView). Date/time overlay via `drawtext` with per-frame`%{pts:localtime}`,
+folder watching with coalesced rescans, `jpackage` app image (`packaging/`). Not done: speed overlay, accelerometer
+charts, automatic GPX next to merged files.
+
+Original plan:
 - Pluggable `TelemetryParser` (SigmaStar dash cam meta, GoPro GPMF, DJI `.SRT`, phone location tag).
 - Map (Leaflet in WebView), speed/acceleration charts, GPX/CSV export, optional date/time/speed overlay (`drawtext`).
 - Folder watching, `jpackage` app-image distribution.

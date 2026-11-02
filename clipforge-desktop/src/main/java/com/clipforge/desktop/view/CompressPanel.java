@@ -51,6 +51,7 @@ public final class CompressPanel extends VBox {
     private final Label qualityValue = new Label();
     private final ComboBox<Integer> segment = new ComboBox<>(FXCollections.observableArrayList(SEGMENT_CHOICES));
     private final Spinner<Integer> parallel = new Spinner<>(1, 4, 1);
+    private final javafx.scene.control.CheckBox overlay = new javafx.scene.control.CheckBox(Messages.get("compress.overlay"));
     private final Label sampleResult = new Label();
     private final Button sampleButton = new Button(Messages.get("compress.sample"));
     private final Button startButton = new Button(Messages.get("compress.start"));
@@ -135,6 +136,8 @@ public final class CompressPanel extends VBox {
         parallel.setTooltip(new Tooltip(Messages.get("compress.parallel.tip")));
         parallel.valueProperty().addListener((o, a, b) -> saveOptions());
         parallel.setPrefWidth(80);
+        overlay.setTooltip(new Tooltip(Messages.get("compress.overlay.tip")));
+        overlay.selectedProperty().addListener((o, a, b) -> saveOptions());
 
 
         GridPane grid = new GridPane();
@@ -167,7 +170,7 @@ public final class CompressPanel extends VBox {
         encoderNote.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.WARNING);
         getChildren().addAll(fromSelection, fromFile, fileRow, summary, new Separator(),
                 new Label(Messages.get("compress.encoder")), encoder, encoderNote,
-                new Label(Messages.get("compress.quality")), qualityRow, grid,
+                new Label(Messages.get("compress.quality")), qualityRow, grid, overlay,
                 new Separator(),
                 sampleButton, sampleResult, startButton, note);
 
@@ -207,6 +210,7 @@ public final class CompressPanel extends VBox {
             qualityValue.setText(Messages.get("compress.quality.value", o.quality()));
             segment.setValue(SEGMENT_CHOICES.contains(o.segmentSeconds()) ? o.segmentSeconds() : 0);
             parallel.getValueFactory().setValue(o.concurrency());
+            overlay.setSelected(o.overlayTime());
 
         } finally {
             loading = false;
@@ -219,7 +223,8 @@ public final class CompressPanel extends VBox {
         }
         controller.setCompressOptions(new CompressOptions(encoder.getValue(), (int) Math.round(quality.getValue()),
                 segment.getValue() == null ? 0 : segment.getValue(), parallel.getValue(),
-                AudioMode.KEEP)); // audio comes from the shared audio panel when the job is planned
+                AudioMode.KEEP, com.clipforge.core.audio.MusicSettings.DEFAULT, overlay.isSelected()));
+        // audio comes from the shared audio panel when the job is planned
         sampleResult.setText("");
     }
 

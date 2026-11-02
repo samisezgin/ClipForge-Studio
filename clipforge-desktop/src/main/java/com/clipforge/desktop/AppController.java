@@ -100,6 +100,7 @@ public final class AppController {
     private final javafx.beans.property.SimpleStringProperty outputDirProp = new javafx.beans.property.SimpleStringProperty();
 
     private JobQueue queue;
+    private final FolderWatcher watcher = new FolderWatcher(() -> Platform.runLater(this::rescan));
     private int scanGeneration;
     private boolean rescanRequested;
     private final PauseTransition saveDebounce = new PauseTransition(Duration.millis(800));
@@ -274,6 +275,25 @@ public final class AppController {
         selected.forEach(p -> project.getSelectedClips().add(p.toString()));
     }
 
+    /** Starts or stops watching the project folders according to the setting. */
+    private void refreshWatch() {
+        watcher.watch(settings.watchFolders() ? project.getFolders().stream().map(Path::of).toList() : List.of());
+    }
+
+    public boolean watchFolders() {
+        return settings.watchFolders();
+    }
+
+    public void setWatchFolders(boolean on) {
+        settings.setWatchFolders(on);
+        refreshWatch();
+    }
+
+    /** Stops background helpers when the application exits. */
+    public void shutdown() {
+        watcher.close();
+    }
+
     private void scheduleSave() {
         saveDebounce.playFromStart();
     }
@@ -292,6 +312,7 @@ public final class AppController {
         outputDirProp.set(project.getOutputDir());
         projectVersion.set(projectVersion.get() + 1);
         rebuildQueue();
+        refreshWatch();
         rescan();
     }
 
@@ -365,6 +386,7 @@ public final class AppController {
             folders.setAll(project.getFolders());
             settings.setLastFolder(s);
             scheduleSave();
+            refreshWatch();
             rescan();
         }
     }
@@ -375,6 +397,7 @@ public final class AppController {
         }
         folders.setAll(project.getFolders());
         scheduleSave();
+        refreshWatch();
         rescan();
     }
 

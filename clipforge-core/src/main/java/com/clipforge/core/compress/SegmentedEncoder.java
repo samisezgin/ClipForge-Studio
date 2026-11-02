@@ -358,9 +358,19 @@ public final class SegmentedEncoder implements JobExecutor {
         if (!lastOfSource) {
             cmd.addAll(List.of("-t", seconds(length + 2)));
         }
-        cmd.addAll(List.of("-i", in.path(), "-map", "0:v:0", "-vf",
-                "trim=start=" + seconds(start + from) + (lastOfSource ? "" : ":end=" + seconds(start + from + length)),
-                "-fps_mode", "passthrough"));
+        String vf = "trim=start=" + seconds(start + from) + (lastOfSource ? "" : ":end=" + seconds(start + from + length));
+        if (spec.options().overlayTime() && in.startEpochMs() > 0) {
+            var font = TimeOverlay.font();
+            if (font.isPresent()) {
+                vf += "," + TimeOverlay.filter(font.get(), in.startEpochMs(), in.videoStartUs());
+            } else {
+                LOG.warning("No font found for the date/time overlay; encoding without it");
+            }
+        }
+        // the filter graph goes through a file: its quoting does not survive every command-line parser
+        Path vfFile = temp.resolveSibling(s.fileName() + ".vf.txt");
+        Files.writeString(vfFile, vf, StandardCharsets.UTF_8);
+        cmd.addAll(List.of("-i", in.path(), "-map", "0:v:0", "-/vf", vfFile.toString(), "-fps_mode", "passthrough"));
         cmd.addAll(spec.options().profile().videoArgs(spec.options().quality()));
         cmd.addAll(List.of("-an", "-sn", "-dn", "-video_track_timescale", String.valueOf(TIMESCALE),
                 "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "-y", temp.toString()));
@@ -372,6 +382,7 @@ public final class SegmentedEncoder implements JobExecutor {
             long ms = Math.min(s.durationMs(), Math.round(p.frames() / fps * 1000));
             progress.accept(new Progress(Duration.ofMillis(ms), total, p.speed(), p.outputBytes(), p.frames()));
         }, token);
+        Files.deleteIfExists(vfFile);
         if (r.success() && !CompressRecovery.validSegment(temp, s)) {
             r = new FfmpegResult(1, false, List.of("Encoded segment " + s.getIndex() + " is incomplete or too short"));
         }

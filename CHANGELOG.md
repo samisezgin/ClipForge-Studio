@@ -5,6 +5,15 @@ each development phase is a minor release.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-02
+### Added
+- Telemetry tab completed: dash cam (SigmaStar) clock and GPS data, GoPro GPMF, DJI .SRT and phone location tags;
+  route preview, speed chart, GPX/CSV export, OpenStreetMap view in the browser.
+- "Burn date and time into the video" for compression: per-frame date/time stamp from the clip start times,
+  correct across segments and joined clips.
+- Folder watching (View menu, on by default): clips copied into a project folder appear without pressing Rescan.
+- Packaging scripts (`packaging/`) producing a self-contained app image with `jpackage`.
+
 ## [0.3.0] - 2026-11-02
 ### Added
 - Audio panel shared by merging and compression: keep original audio, remove it, or background music.

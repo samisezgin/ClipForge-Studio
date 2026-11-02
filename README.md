@@ -5,7 +5,8 @@ Desktop tool for working with segmented video recordings (dash cams, phones, act
 - **Merge** clip segments losslessly (stream copy) — per continuous session or all selected clips into one file.
 - **Re-score audio** — keep, remove, or replace with a looping music playlist (seamless crossfade at every restart, optional fade-out, volume, optional quiet mix of the original sound) — for merging and compression.
 - **Compress** large recordings with AV1/HEVC (NVENC, SVT-AV1, x265) in resumable segments; the output grows while encoding and can be watched, pause/stop/crash lose at most the segments in progress.
-- **Telemetry** (GPS/speed) visualisation where the camera embeds it. *(planned, phase 4)*
+- **Telemetry** — reads GPS/time data embedded by dash cams (SigmaStar), GoPro (GPMF), DJI (.SRT) and phones; route preview, speed chart, GPX/CSV export, OpenStreetMap view.
+- **Date/time stamp** burned into compressed videos; **folder watching** picks up clips while they are still being copied.
 
 All heavy lifting is done by [FFmpeg](https://ffmpeg.org); ClipForge is the workflow and UI around it.
 
@@ -23,6 +24,16 @@ All heavy lifting is done by [FFmpeg](https://ffmpeg.org); ClipForge is the work
 ```
 
 On Windows use `mvnw.cmd`.
+
+### Packaging
+
+```sh
+powershell -ExecutionPolicy Bypass -File packaging\package.ps1   # Windows app image in dist/
+packaging/package.sh                                           # Linux / macOS
+```
+
+The app image contains its own Java runtime (~100 MB). FFmpeg is not bundled: install it separately or choose its
+folder under *Tools ▸ FFmpeg location*. `-Type msi` / `exe` installers additionally need the WiX Toolset.
 
 ## Project layout
 

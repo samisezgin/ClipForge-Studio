@@ -319,6 +319,31 @@ class SegmentedEncoderTest {
     }
 
     @Test
+    void burnsRecordingTimeIntoThePicture() throws Exception {
+        assumeTrue(TimeOverlay.font().isPresent(), "no font available");
+        MediaInfo m = new ProbeService(tools).probe(source).orElseThrow();
+        long start = java.time.LocalDateTime.of(2026, 11, 1, 23, 39, 33)
+                .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        CompressOptions o = new CompressOptions(profile, profile.defaultQuality(), 4, 2, AudioMode.REMOVE,
+                com.clipforge.core.audio.MusicSettings.DEFAULT, true);
+        Path outDir = Files.createDirectories(tmp.resolve("overlay"));
+        CompressSpec spec = new CompressSpec(List.of(CompressInput.of(source, m, start)),
+                outDir.resolve("stamped.mp4").toString(), o, m.duration().toMillis(), Files.size(source), false);
+        JobRecord job = JobRecord.compress(spec, List.of(), Clock.systemUTC().instant());
+        JobQueue q = queue(new Noop());
+        q.submit(List.of(job));
+        assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
+        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals(FRAMES, frames(Path.of(job.output())));
+        // keep a frame 12 s in (third segment) for visual inspection: it must read 2026-11-01 23:39:45
+        Path frame = Path.of(System.getProperty("user.dir")).getParent().resolve("test-output").resolve("overlay-12s.png");
+        Files.createDirectories(frame.getParent());
+        FfmpegTestSupport.run(List.of(tools.ffmpeg().toString(), "-v", "error", "-y", "-ss", "12", "-i", job.output(),
+                "-frames:v", "1", frame.toString()));
+        assertTrue(Files.size(frame) > 0);
+    }
+
+    @Test
     void sampleEstimatesSize() throws Exception {
         JobRecord job = newJob(1);
         CompressSampler.Result r = new CompressSampler(tools).sample(job.getCompress().getSpec(), 6, null);
