@@ -38,6 +38,34 @@ public final class Project {
     private boolean deleteSources;
     /** The user's order of clips for a free merge (absolute paths). */
     private List<String> mergeOrder = new ArrayList<>();
+    /** "Hide plates and faces" step, and what it hides. */
+    private boolean stepHide;
+    private boolean hidePlates = true;
+    private boolean hideFaces = true;
+
+    public boolean isStepHide() {
+        return stepHide;
+    }
+
+    public void setStepHide(boolean stepHide) {
+        this.stepHide = stepHide;
+    }
+
+    public boolean isHidePlates() {
+        return hidePlates;
+    }
+
+    public void setHidePlates(boolean hidePlates) {
+        this.hidePlates = hidePlates;
+    }
+
+    public boolean isHideFaces() {
+        return hideFaces;
+    }
+
+    public void setHideFaces(boolean hideFaces) {
+        this.hideFaces = hideFaces;
+    }
 
     public List<String> getMergeOrder() {
         return mergeOrder;

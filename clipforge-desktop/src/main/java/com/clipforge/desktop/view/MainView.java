@@ -6,6 +6,7 @@ import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.project.ProjectStore;
 import com.clipforge.core.project.RecoveryService;
 import com.clipforge.core.project.SourceDeletion;
+import com.clipforge.core.util.Formats;
 import com.clipforge.desktop.AppController;
 import com.clipforge.desktop.AppSettings;
 import javafx.application.HostServices;
@@ -112,8 +113,8 @@ public final class MainView {
         Tab compressTab = new Tab(Messages.get("compress.title"), compressPanel);
         Tab telemetryTab = new Tab(Messages.get("telemetry.title"),
                 new TelemetryPanel(controller, host, listeners));
-        TabPane tabs = new TabPane(mergeTab, speedTab, compressTab,
-                telemetryTab);
+        Tab hideTab = new Tab(Messages.get("hide.title"), new HidePanel(controller, listeners));
+        TabPane tabs = new TabPane(mergeTab, speedTab, compressTab, hideTab, telemetryTab);
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         audioPanel = new AudioPanel(controller, listeners);
         AudioPanel audio = audioPanel;
@@ -224,7 +225,8 @@ public final class MainView {
         view.getItems().addAll(language, new SeparatorMenuItem(), dark, light, new SeparatorMenuItem(), watch);
 
         Menu tools = new Menu(Messages.get("menu.tools"));
-        tools.getItems().add(item("menu.tools.ffmpeg", null, this::chooseFfmpeg));
+        tools.getItems().addAll(item("menu.tools.ffmpeg", null, this::chooseFfmpeg),
+                item("menu.tools.components", null, this::showComponents));
 
         Menu help = new Menu(Messages.get("menu.help"));
         help.getItems().addAll(item("menu.help.logs", null, () -> {
@@ -564,6 +566,49 @@ public final class MainView {
     }
 
     // ---------------------------------------------------------------- dialogs
+
+    /** Some components could not be downloaded (offline, blocked): say which and how to retry. */
+    public void showComponentsFailed(List<String> failed) {
+        Alert a = new Alert(Alert.AlertType.WARNING);
+        a.initOwner(stage);
+        a.setTitle(Messages.get("components.title"));
+        a.setHeaderText(Messages.get("components.failed.header"));
+        a.setContentText(String.join("\n", failed) + "\n\n" + Messages.get("components.failed.retry"));
+        a.showAndWait();
+    }
+
+    /** Tools > Components: what ClipForge needs, whether it is installed, and downloading what is missing. */
+    private void showComponents() {
+        var cm = controller.components();
+        StringBuilder text = new StringBuilder();
+        boolean missing = false;
+        for (var c : cm.components()) {
+            if (!c.forThisSystem()) {
+                continue;
+            }
+            boolean ok = cm.isInstalled(c);
+            boolean external = !ok && "noFfmpeg".equals(c.when()) && controller.toolsProperty().get() != null;
+            missing |= !ok && !external;
+            text.append(ok ? "✔ " : external ? "✔ " : "✖ ").append(c.name()).append(" · ")
+                    .append(Formats.size(c.size())).append('\n')
+                    .append("    ").append(Messages.get(ok ? "components.installed"
+                            : external ? "components.external" : "components.missing")).append(" · ")
+                    .append(c.license()).append('\n');
+        }
+        Alert a = new Alert(Alert.AlertType.INFORMATION);
+        a.initOwner(stage);
+        a.setTitle(Messages.get("components.title"));
+        a.setHeaderText(Messages.get("components.header", AppSettings.homeDir().resolve("components").toString()));
+        a.setContentText(text.toString());
+        ButtonType download = new ButtonType(Messages.get("components.download"), ButtonBar.ButtonData.OK_DONE);
+        ButtonType close = new ButtonType(Messages.get("common.close"), ButtonBar.ButtonData.CANCEL_CLOSE);
+        a.getButtonTypes().setAll(missing ? List.of(download, close) : List.of(close));
+        a.showAndWait().filter(b -> b == download).ifPresent(b -> controller.ensureComponents(failed -> {
+            if (!failed.isEmpty()) {
+                showComponentsFailed(failed);
+            }
+        }));
+    }
 
     public void showFfmpegMissing() {
         Alert a = new Alert(Alert.AlertType.WARNING);

@@ -37,6 +37,7 @@ public final class PipelinePanel extends VBox {
     private final CheckBox merge = new CheckBox(Messages.get("pipeline.merge"));
     private final CheckBox speed = new CheckBox(Messages.get("pipeline.speed"));
     private final CheckBox compress = new CheckBox(Messages.get("pipeline.compress"));
+    private final CheckBox hide = new CheckBox(Messages.get("pipeline.hide"));
     /** How and when is asked on Start; here only whether. */
     private final CheckBox deleteSources = new CheckBox(Messages.get("pipeline.delete"));
     private final RadioButton fromSelection = new RadioButton(Messages.get("compress.source.selection"));
@@ -61,7 +62,14 @@ public final class PipelinePanel extends VBox {
         for (CheckBox c : List.of(merge, speed, compress)) {
             c.selectedProperty().addListener((o, a, b) -> saveSteps());
         }
-        FlowPane steps = new FlowPane(16, 6, merge, speed, compress);
+        hide.setTooltip(new Tooltip(Messages.get("pipeline.hide.tip")));
+        hide.selectedProperty().addListener((o, a, b) -> {
+            if (!loading) {
+                controller.setStepHide(b);
+            }
+            update();
+        });
+        FlowPane steps = new FlowPane(16, 6, merge, speed, compress, hide);
         deleteSources.setTooltip(new Tooltip(Messages.get("pipeline.delete.tip")));
         deleteSources.selectedProperty().addListener((o, a, b) -> {
             if (!loading) {
@@ -105,6 +113,7 @@ public final class PipelinePanel extends VBox {
         listeners.on(controller.toolsProperty(), (o, a, b) -> update());
         listeners.on(controller.encodersProperty(), (o, a, b) -> update());
         listeners.on(controller.pipelineVersionProperty(), (o, a, b) -> update());
+        listeners.on(controller.modelsReadyProperty(), (o, a, b) -> update());
         load();
     }
 
@@ -114,6 +123,7 @@ public final class PipelinePanel extends VBox {
             merge.setSelected(controller.stepMerge());
             speed.setSelected(controller.stepSpeed());
             compress.setSelected(controller.stepCompress());
+            hide.setSelected(controller.stepHide());
             deleteSources.setSelected(controller.deleteSources());
             fromFile.setSelected(controller.compressFromFile());
             fromSelection.setSelected(!controller.compressFromFile());
@@ -185,6 +195,9 @@ public final class PipelinePanel extends VBox {
         if (doCompress) {
             parts.add(Messages.get("pipeline.step.compress"));
         }
+        if (hide.isSelected()) {
+            parts.add(Messages.get("pipeline.step.hide"));
+        }
         if (deleteSources.isSelected() && !parts.isEmpty()) {
             parts.add(Messages.get("pipeline.step.delete"));
         }
@@ -203,7 +216,7 @@ public final class PipelinePanel extends VBox {
             Duration d = sel.stream().map(Clip::duration).reduce(Duration.ZERO, Duration::plus);
             long bytes = sel.stream().mapToLong(Clip::size).sum();
             what = Messages.get("merge.summary", sel.size(), Formats.duration(d), Formats.size(bytes));
-            if (!doMerge && (doSpeed || doCompress) && sel.size() > 1) {
+            if (!doMerge && (doSpeed || doCompress || hide.isSelected()) && sel.size() > 1) {
                 what += " · " + Messages.get("pipeline.eachClip");
             }
         }
@@ -214,6 +227,10 @@ public final class PipelinePanel extends VBox {
         String warn = null;
         if (controller.toolsProperty().get() == null) {
             warn = Messages.get("error.noFfmpeg");
+        } else if (hide.isSelected() && !controller.modelsReadyProperty().get()) {
+            warn = Messages.get("pipeline.note.noModels");
+        } else if (hide.isSelected()) {
+            warn = Messages.get("pipeline.note.hide");
         } else if (doSpeed && !doCompress) {
             warn = Messages.get("pipeline.note.speedOnly");
         }
@@ -225,6 +242,7 @@ public final class PipelinePanel extends VBox {
         boolean blocked = nothing
                 || controller.toolsProperty().get() == null
                 || (encodes && controller.compressOptions() == null)
+                || (hide.isSelected() && !controller.modelsReadyProperty().get())
                 || (!onFile && (controller.selectedClips().isEmpty() || controller.scanningProperty().get()));
         start.setDisable(blocked);
     }

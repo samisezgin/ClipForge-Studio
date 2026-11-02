@@ -229,7 +229,7 @@ class DesktopSmokeTest {
                 // the synthetic clips carry no positions or speeds: no Telemetry tab
                 var tabs = (TabPane) stageRef[0].getScene().lookup(".tab-pane");
                 assertFalse(controller.telemetryAvailableProperty().get());
-                assertEquals(3, tabs.getTabs().size(), "merge, speed up, compress");
+                assertEquals(4, tabs.getTabs().size(), "merge, speed up, compress, privacy");
                 return null;
             });
             onFx(() -> {

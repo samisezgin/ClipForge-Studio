@@ -42,7 +42,7 @@
                 <configuration>
                     <mainClass>com.clipforge.desktop/com.clipforge.desktop.ClipForgeApp</mainClass>
                     <options>
-                        <option>--enable-native-access=javafx.graphics,com.clipforge.core</option>
+                        <option>--enable-native-access=javafx.graphics,com.clipforge.core,com.microsoft.onnxruntime</option>
                     </options>
                 </configuration>
             </plugin>
@@ -68,6 +68,43 @@
                                 <configuration>
                                     <includeScope>runtime</includeScope>
                                     <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- ONNX Runtime has no module descriptor; jlink (used by jpackage) refuses automatic modules, so the
+                         copied jar gets one (its native libraries stay inside and are extracted at run time) -->
+                    <plugin>
+                        <groupId>org.moditect</groupId>
+                        <artifactId>moditect-maven-plugin</artifactId>
+                        <version>1.3.0.Final</version>
+                        <executions>
+                            <execution>
+                                <id>onnxruntime-module</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>add-module-info</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                                    <overwriteExistingFiles>true</overwriteExistingFiles>
+                                    <modules>
+                                        <module>
+                                            <artifact>
+                                                <groupId>com.microsoft.onnxruntime</groupId>
+                                                <artifactId>onnxruntime</artifactId>
+                                                <version>${onnxruntime.version}</version>
+                                            </artifact>
+                                            <moduleInfoSource>
+                                                module com.microsoft.onnxruntime {
+                                                    requires java.logging;
+                                                    exports ai.onnxruntime;
+                                                    exports ai.onnxruntime.platform;
+                                                    exports ai.onnxruntime.providers;
+                                                }
+                                            </moduleInfoSource>
+                                        </module>
+                                    </modules>
                                 </configuration>
                             </execution>
                         </executions>

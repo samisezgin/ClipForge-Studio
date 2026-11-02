@@ -4,6 +4,17 @@ All notable changes are documented here. Versions follow [Semantic Versioning](h
 each development phase is a minor release.
 
 ## [Unreleased]
+### Added
+- **Hide plates and faces** (steps panel, Privacy tab): licence plates and faces are found automatically and blurred
+  strongly. Plates: open-image-models YOLOv9 detector on the whole frame plus three tiles across the road band;
+  faces: OpenCV Zoo YuNet. Every 4th frame is searched and the areas move with the cars in between. Runs on the CPU
+  (about real time), resumable like compression. Detection is not perfect: check before sharing.
+- **Components (requirements)**: on start ClipForge checks what it needs and downloads what is missing - the
+  detection models, and FFmpeg on Windows when none is installed - from pinned URLs, verified by SHA-256.
+  Tools ▸ Components shows the status and downloads missing parts.
+
+### Changed
+- The packaged app includes ONNX Runtime (CPU); the detection models are downloaded, not bundled.
 
 ## [1.2.0] - 2026-11-03
 ### Added

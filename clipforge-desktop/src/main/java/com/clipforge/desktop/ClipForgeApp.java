@@ -60,7 +60,7 @@ public class ClipForgeApp extends Application {
         applyTheme(settings.darkTheme());
 
         controller = new AppController(settings);
-        boolean ffmpeg = controller.initFfmpeg();
+        controller.initFfmpeg();
         showView();
         stage.setWidth(1280);
         stage.setHeight(820);
@@ -80,10 +80,16 @@ public class ClipForgeApp extends Application {
 
         List<RecoveryService.Issue> issues = controller.openLastProject();
         Platform.runLater(() -> {
-            if (!ffmpeg) {
-                view.showFfmpegMissing();
-            }
             view.showRecovery(issues);
+            // requirements: missing components (FFmpeg if none is installed, detection models) are downloaded now;
+            // only if FFmpeg still cannot be found is the user asked to choose it
+            controller.ensureComponents(failed -> {
+                if (controller.toolsProperty().get() == null) {
+                    view.showFfmpegMissing();
+                } else if (!failed.isEmpty()) {
+                    view.showComponentsFailed(failed);
+                }
+            });
         });
     }
 

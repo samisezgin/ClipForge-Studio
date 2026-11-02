@@ -1,8 +1,11 @@
 package com.clipforge.desktop;
 
+import com.clipforge.core.anonymize.Detectors;
 import com.clipforge.core.audio.AudioMode;
 import com.clipforge.core.audio.MusicRenderer;
 import com.clipforge.core.audio.MusicSettings;
+import com.clipforge.core.components.Component;
+import com.clipforge.core.components.ComponentManager;
 import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.compress.CompressPlanner;
 import com.clipforge.core.compress.CompressRecovery;
@@ -85,6 +88,7 @@ import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Application state and actions, independent of the concrete widgets. All public methods must be called on the
@@ -118,6 +122,10 @@ public final class AppController {
     private final Set<Path> selected = new HashSet<>();
     private final BooleanProperty scanning = new SimpleBooleanProperty();
     private final BooleanProperty telemetryAvailable = new SimpleBooleanProperty();
+    private final BooleanProperty modelsReady = new SimpleBooleanProperty();
+    private final ComponentManager components = new ComponentManager(AppSettings.homeDir().resolve("components"),
+            ComponentManager.bundled());
+    private final Map<String, Detectors> detectorCache = new HashMap<>();
     private final Map<String, Boolean> telemetryCache = new ConcurrentHashMap<>();
     private volatile int telemetryGeneration;
     private final BooleanProperty queueRunning = new SimpleBooleanProperty();
@@ -151,10 +159,87 @@ public final class AppController {
     /** Locates FFmpeg; returns {@code false} if it was not found. */
     public boolean initFfmpeg() {
         String dir = settings.ffmpegDir();
-        Optional<FfmpegTools> found = FfmpegLocator.locate(dir.isBlank() ? null : Path.of(dir));
+        // last resort: the copy ClipForge downloaded itself (components.json)
+        Path own = components.find("ffmpeg").filter(components::isInstalled).map(components::dir).orElse(null);
+        Optional<FfmpegTools> found = FfmpegLocator.locate(dir.isBlank() ? null : Path.of(dir), own);
         tools.set(found.orElse(null));
         detectEncoders();
         return found.isPresent();
+    }
+
+    // ------------------------------------------------------------------ components (requirements)
+
+    public ComponentManager components() {
+        return components;
+    }
+
+    /** {@code true} once the plate and face models are installed (needed by "Hide plates and faces"). */
+    public BooleanProperty modelsReadyProperty() {
+        return modelsReady;
+    }
+
+    private boolean modelsInstalled() {
+        return Stream.of("plate-model", "face-model")
+                .allMatch(id -> components.find(id).map(components::isInstalled).orElse(false));
+    }
+
+    /**
+     * Like a requirements file: installs every missing component in the background - FFmpeg only when none is
+     * installed otherwise - and reports the progress in the status bar.
+     *
+     * @param finished called on the FX thread with the components that could not be installed (empty when all went
+     *                 well)
+     */
+    public void ensureComponents(Consumer<List<String>> finished) {
+        modelsReady.set(modelsInstalled());
+        List<Component> missing = components.components().stream()
+                .filter(Component::forThisSystem)
+                .filter(c -> !components.isInstalled(c))
+                .filter(c -> !"noFfmpeg".equals(c.when()) || tools.get() == null)
+                .toList();
+        if (missing.isEmpty()) {
+            finished.accept(List.of());
+            return;
+        }
+        Thread.ofVirtual().start(() -> {
+            List<String> failed = new ArrayList<>();
+            for (Component c : missing) {
+                try {
+                    components.install(c, (done, total) -> Platform.runLater(() -> setStatus("status.downloading",
+                            c.name(), total > 0 ? Math.round(done * 100.0 / total) : 0)), null);
+                } catch (IOException | RuntimeException e) {
+                    LOG.log(Level.WARNING, "Installing " + c.name() + " failed", e);
+                    failed.add(c.name() + ": " + e.getMessage());
+                }
+            }
+            Platform.runLater(() -> {
+                modelsReady.set(modelsInstalled());
+                if (tools.get() == null && initFfmpeg()) {
+                    rebuildQueue(); // FFmpeg was just installed
+                    rescan();
+                }
+                setStatus(failed.isEmpty() ? "status.componentsReady" : "status.componentsFailed", failed.size());
+                finished.accept(failed);
+            });
+        });
+    }
+
+    /** Detectors for a job's hide settings; shared and kept for the session (loading a model takes a moment). */
+    private Detectors detectors(CompressOptions.Hide hide) throws IOException {
+        String key = hide.plates() + "/" + hide.faces();
+        synchronized (detectorCache) {
+            Detectors d = detectorCache.get(key);
+            if (d == null) {
+                Path plates = hide.plates() ? components.file("plate-model", "plates.onnx").orElse(null) : null;
+                Path faces = hide.faces() ? components.file("face-model", "faces.onnx").orElse(null) : null;
+                if ((hide.plates() && plates == null) || (hide.faces() && faces == null)) {
+                    return null; // not installed: the job fails with a clear message
+                }
+                d = new Detectors(plates, faces);
+                detectorCache.put(key, d);
+            }
+            return d;
+        }
     }
 
     /** Test-encodes with each profile in the background (NVENC needs a working NVIDIA driver). */
@@ -372,7 +457,7 @@ public final class AppController {
         }
         Map<JobType, JobExecutor> executors = Map.of(
                 JobType.MERGE, new MergeExecutor(new MergeService(t)),
-                JobType.COMPRESS, new SegmentedEncoder(t));
+                JobType.COMPRESS, new SegmentedEncoder(t, this::detectors));
         queue = new JobQueue(project, executors, this::saveFromWorker, new JobQueue.Listener() {
             @Override
             public void jobChanged(JobRecord job) {
@@ -1044,7 +1129,7 @@ public final class AppController {
     }
 
     public RunKind runKind() {
-        if (project.isStepSpeed() || project.isStepCompress()) {
+        if (project.isStepSpeed() || project.isStepCompress() || project.isStepHide()) {
             return RunKind.ENCODE;
         }
         // a single file has nothing to merge
@@ -1063,7 +1148,7 @@ public final class AppController {
         if (project.isStepCompress()) {
             return true;
         }
-        return !project.isStepSpeed() && !freeMergeNeedsEncoding();
+        return !project.isStepSpeed() && !project.isStepHide() && !freeMergeNeedsEncoding();
     }
 
     /**
@@ -1085,7 +1170,41 @@ public final class AppController {
         if (project.isStepSpeed()) {
             o = o.withSpeed(project.getSpeedFactor());
         }
+        if (project.isStepHide()) {
+            o = o.withHide(new CompressOptions.Hide(project.isHidePlates(), project.isHideFaces()));
+        }
         return withAudio(o);
+    }
+
+    // ------------------------------------------------------------------ hide plates and faces
+
+    public boolean stepHide() {
+        return project.isStepHide();
+    }
+
+    public void setStepHide(boolean hide) {
+        synchronized (project) {
+            project.setStepHide(hide);
+        }
+        bumpPipeline();
+        scheduleSave();
+    }
+
+    public boolean hidePlates() {
+        return project.isHidePlates();
+    }
+
+    public boolean hideFaces() {
+        return project.isHideFaces();
+    }
+
+    public void setHideTargets(boolean plates, boolean faces) {
+        synchronized (project) {
+            project.setHidePlates(plates);
+            project.setHideFaces(faces);
+        }
+        bumpPipeline();
+        scheduleSave();
     }
 
     /** Result of {@link #planCompress()}. */

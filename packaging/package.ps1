@@ -18,7 +18,7 @@ try {
     jpackage --type $Type --name "ClipForge Studio" --app-version $version --vendor "ClipForge" `
         --dest $out --module-path "$jar;$desktop\lib" `
         --module com.clipforge.desktop/com.clipforge.desktop.ClipForgeApp `
-        --java-options "--enable-native-access=javafx.graphics,com.clipforge.core" `
+        --java-options "--enable-native-access=javafx.graphics,com.clipforge.core,com.microsoft.onnxruntime" `
         --icon (Join-Path $PSScriptRoot "clipforge.ico") `
         --description "Merge, speed up and compress videos"
     if ($LASTEXITCODE -ne 0) { throw "jpackage failed" }
