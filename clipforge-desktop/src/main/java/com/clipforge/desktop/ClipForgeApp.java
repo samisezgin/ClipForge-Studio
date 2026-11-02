@@ -20,9 +20,31 @@ public class ClipForgeApp extends Application {
     private Stage stage;
     private MainView view;
 
+    /** Rotating log files in ~/.clipforge/logs (the packaged app has no console). */
+    static void setUpLogging() {
+        try {
+            java.nio.file.Path dir = AppSettings.homeDir().resolve("logs");
+            java.nio.file.Files.createDirectories(dir);
+            java.util.logging.FileHandler file = new java.util.logging.FileHandler(
+                    dir.resolve("clipforge-%g.log").toString(), 5_000_000, 5, true);
+            file.setEncoding("UTF-8");
+            file.setFormatter(new java.util.logging.SimpleFormatter());
+            java.util.logging.Logger root = java.util.logging.Logger.getLogger("");
+            root.addHandler(file);
+            root.setLevel(java.util.logging.Level.INFO);
+        } catch (java.io.IOException e) {
+            System.err.println("Cannot write log files: " + e);
+        }
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> java.util.logging.Logger.getLogger("ClipForge")
+                .log(java.util.logging.Level.SEVERE, "Uncaught exception in " + t.getName(), e));
+    }
+
     @Override
     public void start(Stage stage) {
         this.stage = stage;
+        setUpLogging();
+        java.util.logging.Logger.getLogger("ClipForge").info("Starting ClipForge Studio "
+                + com.clipforge.core.ClipForge.displayVersion());
         settings = AppSettings.user();
         Messages.use(initialLanguage(), AppSettings.languageDirs());
         applyTheme(settings.darkTheme());
@@ -91,6 +113,7 @@ public class ClipForgeApp extends Application {
     public void stop() {
         if (controller != null) {
             controller.saveNow();
+            controller.shutdown();
         }
     }
 

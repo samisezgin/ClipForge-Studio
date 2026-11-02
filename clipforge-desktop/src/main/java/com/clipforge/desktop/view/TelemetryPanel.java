@@ -81,9 +81,23 @@ public final class TelemetryPanel extends VBox {
         hint.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
 
         getChildren().addAll(read, status, route, speed, exports, hint);
-        listeners.on(controller.selectionVersionProperty(), (o, a, b) -> clear());
-        listeners.on(controller.sessions(), c -> clear());
+        // a rescan (e.g. by folder watching) re-creates the session list; only a different selection resets the panel
+        listeners.on(controller.selectionVersionProperty(), (o, a, b) -> clearIfSelectionChanged());
+        listeners.on(controller.sessions(), c -> clearIfSelectionChanged());
+        listeners.on(controller.toolsProperty(), (o, a, b) -> updateButtons());
         clear();
+    }
+
+    private List<java.nio.file.Path> readFor = List.of();
+
+    private void clearIfSelectionChanged() {
+        List<java.nio.file.Path> now = controller.selectedClips().stream().map(Clip::path).toList();
+        if (!now.equals(readFor)) {
+            readFor = now;
+            clear();
+        } else {
+            updateButtons();
+        }
     }
 
     private void clear() {
@@ -109,6 +123,7 @@ public final class TelemetryPanel extends VBox {
             return;
         }
         long gen = ++generation;
+        readFor = clips.stream().map(Clip::path).toList();
         status.setText(Messages.get("telemetry.reading", clips.size()));
         read.setDisable(true);
         controller.readTelemetry(clips, t -> {
@@ -210,13 +225,17 @@ public final class TelemetryPanel extends VBox {
     private void showMap() {
         try {
             Path html = Files.createTempFile("clipforge-route-", ".html");
+            html.toFile().deleteOnExit();
             StringBuilder coords = new StringBuilder();
-            current.samples().stream().filter(TelemetrySample::hasPosition).forEach(s -> coords
+            current.samples().stream().filter(TelemetrySample::hasPosition)
+                    .filter(s -> Double.isFinite(s.latitude()) && Double.isFinite(s.longitude())).forEach(s -> coords
                     .append(String.format(Locale.ROOT, "[%.7f,%.7f],", s.latitude(), s.longitude())));
             String page = """
                     <!doctype html><html><head><meta charset="utf-8"><title>ClipForge route</title>
-                    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-                    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+                     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+                    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+                     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
                     <style>html,body,#map{height:100%%;margin:0}</style></head><body><div id="map"></div><script>
                     var pts=[%s];var map=L.map('map');
                     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,
@@ -228,6 +247,8 @@ public final class TelemetryPanel extends VBox {
             Files.writeString(html, page, StandardCharsets.UTF_8);
             if (host != null) {
                 host.showDocument(html.toUri().toString());
+            } else {
+                controller.setStatus("telemetry.mapSaved", html);
             }
         } catch (IOException e) {
             controller.setStatus("error.io", e.getMessage());

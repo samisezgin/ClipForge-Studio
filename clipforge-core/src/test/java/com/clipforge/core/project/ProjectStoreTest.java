@@ -54,6 +54,26 @@ class ProjectStoreTest {
     }
 
     @Test
+    void fingerprintToleratesFatDstShift() throws Exception {
+        Path f = Files.writeString(dir.resolve("clip.mp4"), "video");
+        Fingerprint fp = Fingerprint.of(f);
+        Files.setLastModifiedTime(f, java.nio.file.attribute.FileTime.fromMillis(fp.modifiedMillis() + 3_600_000));
+        assertTrue(fp.matchesDisk(), "exactly one hour: FAT32 card after a DST change");
+        Files.setLastModifiedTime(f, java.nio.file.attribute.FileTime.fromMillis(fp.modifiedMillis() + 600_000));
+        assertFalse(fp.matchesDisk(), "ten minutes: really changed");
+    }
+
+    @Test
+    void partialMusicSettingsAndUnknownModesLoad() throws Exception {
+        Path file = dir.resolve("old.cfproj");
+        Files.writeString(file, "{\"formatVersion\":1,\"audioMode\":\"SOMETHING_NEW\",\"music\":{\"tracks\":[\"a.mp3\"]}}");
+        Project p = ProjectStore.load(file);
+        assertEquals(com.clipforge.core.audio.AudioMode.KEEP, p.getAudioMode());
+        assertEquals(1.0, p.getMusic().volume(), 1e-9, "missing volume is the default, not 0");
+        assertTrue(p.getMusic().loop());
+    }
+
+    @Test
     void addsExtension() {
         assertEquals("a.cfproj", ProjectStore.withExtension(Path.of("a")).getFileName().toString());
         assertEquals("a.cfproj", ProjectStore.withExtension(Path.of("a.cfproj")).getFileName().toString());

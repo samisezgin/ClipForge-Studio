@@ -1,11 +1,11 @@
 # Pause & Recovery Design
 
-Recovery runs on startup and whenever **Resume** is pressed. No watermark or marker is written into the video;
+Recovery runs when a project is opened and whenever a job starts or resumes (sources and music are checked before every run). No watermark or marker is written into the video;
 progress is derived from two independent sources that cross-check each other:
 
 1. **Job record in the project file (`.cfproj`)** — source fingerprint (path + size + mtime), encoding settings,
    segment table `{index, start, end, state: PENDING / ENCODING / ENCODED / APPENDED, temp file}` and the
-   **committed point** (`committedBytes` = output size after the last successful append, plus `committedTime`).
+   **committed point** (`committedBytes` = output size after the last successful append, plus `committedTicks`).
 2. **The output file itself** — every `moof` box carries a `tfdt` (decode time of the fragment), which is used to
    find the segments that are really in the file when it was damaged (scenario 3). Recovering a job whose project file
    is lost is not implemented yet.
@@ -29,7 +29,7 @@ append segment to output → `FileChannel.force()` → atomically update project
 
 ## Pausing
 - **Pause (default, lossless):** no new segments are started; running segments finish and are appended.
-  The button shows "Pausing… (1 segment left)".
+  The status line shows "Pausing after the segments in progress…".
 - **Stop now:** FFmpeg receives `q` (killed after 2 s); partial segments are deleted (≤ ~1 min of work lost each).
 - A paused job stays in the project file and can be resumed days later.
 - Closing the app while a job runs asks: *Pause and exit / Stop now and exit / Cancel*.

@@ -326,7 +326,7 @@ public final class SegmentedEncoder implements JobExecutor {
                 seq = state.getNextSequence();
             }
             Path temp = CompressRecovery.segmentFile(spec, next);
-            FragmentedMp4.AppendResult r = FragmentedMp4.append(part, base, temp, ticks, seq); // flushed to disk
+            FragmentedMp4.AppendResult r = appendWithRetry(part, base, temp, ticks, seq, state); // flushed to disk
             if (base == null) {
                 base = FragmentedMp4.inspect(temp);
             }
@@ -339,6 +339,38 @@ public final class SegmentedEncoder implements JobExecutor {
             ctx.save(); // committed point persisted before the temp file disappears
             Files.deleteIfExists(temp);
         }
+    }
+
+    /**
+     * Some players lock a file they are showing; retry the append a few times. A failed attempt may have written
+     * part of the segment, so the output is cut back to the committed point before each retry.
+     */
+    private static FragmentedMp4.AppendResult appendWithRetry(Path part, FragmentedMp4.Info base, Path temp,
+                                                              long ticks, int seq, CompressState state)
+            throws IOException {
+        IOException last = null;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try {
+                return FragmentedMp4.append(part, base, temp, ticks, seq);
+            } catch (FragmentedMp4.IncompatibleException e) {
+                throw e;
+            } catch (IOException e) {
+                last = e;
+                LOG.warning("Appending to " + part.getFileName() + " failed (" + e.getMessage() + "), retrying");
+                try {
+                    Thread.sleep(1000L * (attempt + 1));
+                    if (Files.exists(part)) {
+                        FragmentedMp4.truncate(part, state.getCommittedBytes());
+                    }
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                } catch (IOException ignored) {
+                    // still locked; next attempt
+                }
+            }
+        }
+        throw last;
     }
 
     private SegmentResult encode(CompressSpec spec, SegmentRecord s, CancellationToken token,
@@ -358,9 +390,19 @@ public final class SegmentedEncoder implements JobExecutor {
         if (!lastOfSource) {
             cmd.addAll(List.of("-t", seconds(length + 2)));
         }
-        cmd.addAll(List.of("-i", in.path(), "-map", "0:v:0", "-vf",
-                "trim=start=" + seconds(start + from) + (lastOfSource ? "" : ":end=" + seconds(start + from + length)),
-                "-fps_mode", "passthrough"));
+        String vf = "trim=start=" + seconds(start + from) + (lastOfSource ? "" : ":end=" + seconds(start + from + length));
+        if (spec.options().overlayTime() && in.startEpochMs() > 0) {
+            var font = TimeOverlay.font();
+            if (font.isPresent()) {
+                vf += "," + TimeOverlay.filter(font.get(), in.startEpochMs(), in.videoStartUs());
+            } else {
+                LOG.warning("No font found for the date/time overlay; encoding without it");
+            }
+        }
+        // the filter graph goes through a file: its quoting does not survive every command-line parser
+        Path vfFile = temp.resolveSibling(s.fileName() + ".vf.txt");
+        Files.writeString(vfFile, vf, StandardCharsets.UTF_8);
+        cmd.addAll(List.of("-i", in.path(), "-map", "0:v:0", "-/vf", vfFile.toString(), "-fps_mode", "passthrough"));
         cmd.addAll(spec.options().profile().videoArgs(spec.options().quality()));
         cmd.addAll(List.of("-an", "-sn", "-dn", "-video_track_timescale", String.valueOf(TIMESCALE),
                 "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "-y", temp.toString()));
@@ -372,6 +414,7 @@ public final class SegmentedEncoder implements JobExecutor {
             long ms = Math.min(s.durationMs(), Math.round(p.frames() / fps * 1000));
             progress.accept(new Progress(Duration.ofMillis(ms), total, p.speed(), p.outputBytes(), p.frames()));
         }, token);
+        Files.deleteIfExists(vfFile);
         if (r.success() && !CompressRecovery.validSegment(temp, s)) {
             r = new FfmpegResult(1, false, List.of("Encoded segment " + s.getIndex() + " is incomplete or too short"));
         }

@@ -36,7 +36,7 @@ public final class FfmpegProcess {
         cmd.add(command.getFirst());
         cmd.addAll(List.of("-hide_banner", "-nostats", "-progress", "pipe:1"));
         cmd.addAll(command.subList(1, command.size()));
-        LOG.fine(() -> "Running: " + String.join(" ", cmd));
+        LOG.info(() -> "Running: " + String.join(" ", cmd));
 
         if (token != null && token.isCancelled()) {
             return new FfmpegResult(-1, true, List.of()); // never start work that was already cancelled

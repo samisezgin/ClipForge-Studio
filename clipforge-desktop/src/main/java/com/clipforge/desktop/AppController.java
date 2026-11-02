@@ -98,10 +98,14 @@ public final class AppController {
     private final ObjectProperty<Integer> selectionVersion = new SimpleObjectProperty<>(0);
     private final ObjectProperty<Integer> projectVersion = new SimpleObjectProperty<>(0);
     private final javafx.beans.property.SimpleStringProperty outputDirProp = new javafx.beans.property.SimpleStringProperty();
+    /** Set when a job stopped because its sources changed while the app was running; the view asks the user. */
+    private final ObjectProperty<List<RecoveryService.Issue>> pendingRecovery = new SimpleObjectProperty<>();
 
     private JobQueue queue;
+    private final FolderWatcher watcher = new FolderWatcher(() -> Platform.runLater(this::rescan));
     private int scanGeneration;
     private boolean rescanRequested;
+    private volatile com.clipforge.core.ffmpeg.CancellationToken sampleToken;
     private final PauseTransition saveDebounce = new PauseTransition(Duration.millis(800));
 
     public AppController(AppSettings settings) {
@@ -234,6 +238,11 @@ public final class AppController {
 
     private void load(Path file) throws IOException {
         Project p = ProjectStore.load(file);
+        // projects from 0.2 stored "remove audio" only in the compression options
+        if (p.getAudioMode() == com.clipforge.core.audio.AudioMode.KEEP && p.getCompressOptions() != null
+                && p.getCompressOptions().audio() == com.clipforge.core.audio.AudioMode.REMOVE) {
+            p.setAudioMode(com.clipforge.core.audio.AudioMode.REMOVE);
+        }
         project = p;
         projectFile.set(file);
         boolean isUntitled = file.equals(untitledFile());
@@ -274,6 +283,29 @@ public final class AppController {
         selected.forEach(p -> project.getSelectedClips().add(p.toString()));
     }
 
+    /** Starts or stops watching the project folders according to the setting. */
+    private void refreshWatch() {
+        watcher.watch(settings.watchFolders() ? project.getFolders().stream().map(Path::of).toList() : List.of());
+    }
+
+    public boolean watchFolders() {
+        return settings.watchFolders();
+    }
+
+    public void setWatchFolders(boolean on) {
+        settings.setWatchFolders(on);
+        refreshWatch();
+    }
+
+    /** Stops background helpers when the application exits. */
+    public void shutdown() {
+        watcher.close();
+        var s = sampleToken;
+        if (s != null) {
+            s.cancel(); // no orphaned ffmpeg after exit
+        }
+    }
+
     private void scheduleSave() {
         saveDebounce.playFromStart();
     }
@@ -292,6 +324,7 @@ public final class AppController {
         outputDirProp.set(project.getOutputDir());
         projectVersion.set(projectVersion.get() + 1);
         rebuildQueue();
+        refreshWatch();
         rescan();
     }
 
@@ -316,6 +349,12 @@ public final class AppController {
             @Override
             public void progress(JobRecord job, Progress p) {
                 Platform.runLater(() -> progress.put(job.getId(), p));
+            }
+
+            @Override
+            public void sourcesChanged(JobRecord job) {
+                Platform.runLater(() -> pendingRecovery.set(RecoveryService.analyze(project).stream()
+                        .filter(i -> i.job() == job).toList()));
             }
 
             @Override
@@ -365,6 +404,7 @@ public final class AppController {
             folders.setAll(project.getFolders());
             settings.setLastFolder(s);
             scheduleSave();
+            refreshWatch();
             rescan();
         }
     }
@@ -375,12 +415,15 @@ public final class AppController {
         }
         folders.setAll(project.getFolders());
         scheduleSave();
+        refreshWatch();
         rescan();
     }
 
     public void rescan() {
         FfmpegTools t = tools.get();
         if (t == null || project.getFolders().isEmpty()) {
+            scanGeneration++; // a scan still running for removed folders must not repopulate the list
+            rescanRequested = false;
             sessions.clear();
             return;
         }
@@ -401,10 +444,10 @@ public final class AppController {
                         Platform.runLater(() -> setStatus("status.scanning", done, total)));
                 List<Session> grouped = new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
                 Platform.runLater(() -> applyScan(generation, clips, grouped));
-            } catch (IOException e) {
+            } catch (Exception e) {
                 Platform.runLater(() -> {
                     scanning.set(false);
-                    setStatus("status.scanFailed", e.getMessage());
+                    setStatus("status.scanFailed", String.valueOf(e.getMessage()));
                     rescanIfRequested();
                 });
             }
@@ -418,10 +461,20 @@ public final class AppController {
         }
     }
 
-    private void applyScan(int generation, List<Clip> clips, List<Session> grouped) {
+    private void applyScan(int generation, List<Clip> scanned, List<Session> scannedSessions) {
         scanning.set(false);
+        // outputs of this project's jobs (e.g. output folder = source folder) are never offered as new clips
+        java.util.Set<Path> outputs;
+        synchronized (project) {
+            outputs = project.getJobs().stream().filter(j -> j.output() != null).map(j -> Path.of(j.output()))
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+        List<Clip> clips = scanned.stream().filter(c -> !outputs.contains(c.path())).toList();
+        List<Session> grouped = clips.size() == scanned.size() ? scannedSessions
+                : new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
         if (generation != scanGeneration) {
             // the project or its folders changed while scanning: these results are stale
+            rescanRequested = false;
             rescan();
             return;
         }
@@ -453,6 +506,7 @@ public final class AppController {
         }
         bumpSelection();
         scheduleSave();
+        refreshWatch(); // re-registers folders that were unavailable (e.g. an SD card plugged in again)
         rescanIfRequested();
     }
 
@@ -684,6 +738,11 @@ public final class AppController {
         return p == null ? null : CompressOptions.defaults(p);
     }
 
+    /** The options as saved in the project, regardless of encoder availability. */
+    public CompressOptions compressOptionsSaved() {
+        return project.getCompressOptions();
+    }
+
     /** {@code true} if the project's saved encoder does not work on this machine and a default replaces it. */
     public boolean savedEncoderUnavailable() {
         CompressOptions o = project.getCompressOptions();
@@ -745,6 +804,7 @@ public final class AppController {
         CompressInputs in = new CompressInputs(tools.get(), withAudio(compressOptions()), project.getOutputDir(),
                 project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions), Set.copyOf(selected),
                 project.getMergeMode(), project.getMergeOptions(), reservedOutputs(), selectedClips().isEmpty());
+        Project origin = project;
         Thread.ofVirtual().start(() -> {
             CompressPlan plan;
             try {
@@ -754,7 +814,11 @@ public final class AppController {
                 plan = CompressPlan.error("error.internal", e.getClass().getSimpleName());
             }
             CompressPlan p = plan;
-            Platform.runLater(() -> result.accept(p));
+            Platform.runLater(() -> {
+                if (project == origin) { // another project was opened meanwhile: drop the plan
+                    result.accept(p);
+                }
+            });
         });
     }
 
@@ -788,6 +852,9 @@ public final class AppController {
         }
         if (o == null) {
             return CompressPlan.error("error.noEncoder");
+        }
+        if (o.overlayTime() && com.clipforge.core.compress.TimeOverlay.font().isEmpty()) {
+            return CompressPlan.error("error.noFont");
         }
         String out = in.outputDir();
         if (out == null || out.isBlank()) {
@@ -854,10 +921,14 @@ public final class AppController {
             failed.accept(Messages.get("error.noFfmpeg"));
             return;
         }
+        Project origin = project;
         Thread.ofVirtual().start(() -> {
             try {
                 List<JobRecord> jobs = createCompressJobs(specs);
                 Platform.runLater(() -> {
+                    if (project != origin) {
+                        return;
+                    }
                     submitCompress(jobs);
                     setStatus("status.compressQueued", jobs.size());
                 });
@@ -887,7 +958,11 @@ public final class AppController {
         }
         saveNow();
         queue.submit(created);
-        queue.unpause();
+        if (queue.isDraining()) {
+            setStatus("status.queuedWhilePausing"); // the pause stays in effect; Resume starts everything
+        } else {
+            queue.unpause();
+        }
         queueRunning.set(true);
         queuePaused.set(project.getJobs().stream()
                 .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PAUSED));
@@ -898,8 +973,10 @@ public final class AppController {
                        java.util.function.Consumer<String> failed) {
         FfmpegTools t = tools.get();
         Thread.ofVirtual().start(() -> {
+            com.clipforge.core.ffmpeg.CancellationToken token = new com.clipforge.core.ffmpeg.CancellationToken();
+            sampleToken = token;
             try {
-                CompressSampler.Result r = new CompressSampler(t).sample(spec, 60, null);
+                CompressSampler.Result r = new CompressSampler(t).sample(spec, 60, token);
                 Platform.runLater(() -> done.accept(r));
             } catch (Exception e) {
                 // any failure must reach the UI, otherwise the Sample button would stay disabled
@@ -1000,7 +1077,11 @@ public final class AppController {
         saveNow();
         // start the new jobs only; jobs the user paused earlier stay paused until "Resume"
         queue.submit(created);
-        queue.unpause();
+        if (queue.isDraining()) {
+            setStatus("status.queuedWhilePausing");
+        } else {
+            queue.unpause();
+        }
         queueRunning.set(true);
         queuePaused.set(project.getJobs().stream()
                 .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PAUSED));
@@ -1029,6 +1110,15 @@ public final class AppController {
             queuePaused.set(false);
             queueRunning.set(true);
             queue.resume();
+        }
+    }
+
+    /** Runs a failed job again (a compression job keeps the segments that were already encoded). */
+    public void retryJob(JobRecord job) {
+        if (queue != null) {
+            queueRunning.set(true);
+            queue.retry(job);
+            refreshJob(job);
         }
     }
 
@@ -1102,6 +1192,27 @@ public final class AppController {
             queue.pause();
             queuePaused.set(true);
         }
+    }
+
+    /** The user confirms the sources did not really change (e.g. copied again, other drive letter): keep all work. */
+    public void acceptSourcesUnchanged(List<RecoveryService.Issue> issues) {
+        synchronized (project) {
+            for (RecoveryService.Issue i : issues) {
+                if (i.kind() != RecoveryService.Kind.SOURCE_CHANGED) {
+                    continue;
+                }
+                try {
+                    RecoveryService.acceptChangedSources(i.job());
+                } catch (IOException e) {
+                    LOG.log(Level.WARNING, "Cannot re-read sources", e);
+                }
+            }
+        }
+        List<RecoveryService.Issue> asInterrupted = issues.stream()
+                .map(i -> i.kind() == RecoveryService.Kind.SOURCE_CHANGED
+                        ? new RecoveryService.Issue(i.job(), RecoveryService.Kind.INTERRUPTED, List.of()) : i)
+                .toList();
+        resumeInterrupted(asInterrupted, true);
     }
 
     public void cancelJobs(List<RecoveryService.Issue> issues) {
@@ -1206,6 +1317,17 @@ public final class AppController {
 
     public ObjectProperty<FfmpegTools> toolsProperty() {
         return tools;
+    }
+
+    public ObjectProperty<List<RecoveryService.Issue>> pendingRecoveryProperty() {
+        return pendingRecovery;
+    }
+
+    /** Media time already in a compression job's growing output (read under the project lock). */
+    public long appendedMs(JobRecord job) {
+        synchronized (project) {
+            return job.getCompress() == null ? 0 : job.getCompress().appendedMs();
+        }
     }
 
     public ObjectProperty<Integer> selectionVersionProperty() {

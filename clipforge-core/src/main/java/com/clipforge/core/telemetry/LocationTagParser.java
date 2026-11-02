@@ -43,10 +43,33 @@ public final class LocationTagParser implements TelemetryParser {
         if (!m.lookingAt()) {
             return Optional.empty();
         }
-        double lat = Double.parseDouble(m.group(1));
-        double lon = Double.parseDouble(m.group(2));
+        double lat = degrees(m.group(1), 2);
+        double lon = degrees(m.group(2), 3);
         Double alt = m.group(3) == null ? null : Double.valueOf(m.group(3));
         TelemetrySample s = new TelemetrySample(Duration.ZERO, null, lat, lon, alt, null, null);
         return s.hasPosition() ? Optional.of(s) : Optional.empty();
+    }
+
+    /**
+     * ISO 6709 allows ±DD.D, ±DDMM.M and ±DDMMSS.S (longitude with three degree digits); the number of digits before
+     * the decimal point tells which.
+     */
+    static double degrees(String v, int degreeDigits) {
+        double sign = v.startsWith("-") ? -1 : 1;
+        String n = v.substring(1);
+        int dot = n.indexOf('.');
+        int intDigits = dot < 0 ? n.length() : dot;
+        double value = Double.parseDouble(n);
+        if (intDigits == degreeDigits + 2) { // DDMM
+            double d = Math.floor(value / 100);
+            return sign * (d + (value - d * 100) / 60);
+        }
+        if (intDigits == degreeDigits + 4) { // DDMMSS
+            double d = Math.floor(value / 10000);
+            double rest = value - d * 10000;
+            double min = Math.floor(rest / 100);
+            return sign * (d + min / 60 + (rest - min * 100) / 3600);
+        }
+        return sign * value;
     }
 }

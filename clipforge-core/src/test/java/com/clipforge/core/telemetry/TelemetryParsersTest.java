@@ -122,6 +122,44 @@ class TelemetryParsersTest {
     }
 
     @Test
+    void goProGps9CarriesItsOwnTime() {
+        ByteBuffer scal = ByteBuffer.allocate(36).putInt(10_000_000).putInt(10_000_000).putInt(1000).putInt(1000)
+                .putInt(100).putInt(1).putInt(1000).putInt(100).putInt(1);
+        ByteBuffer gps = ByteBuffer.allocate(32);
+        gps.putInt(410082000).putInt(289784000).putInt(39000).putInt(5000).putInt(500)
+                .putInt(9801).putInt(43_200_000).putShort((short) 120).putShort((short) 3); // 2026-11-01 12:00, 3D fix
+        byte[] strm = concat(klv("SCAL", 'l', 4, 9, scal.array()), klv("GPS9", '?', 32, 1, gps.array()));
+        List<TelemetrySample> s = GoProGpmfParser.parsePacket(klvContainer("DEVC", klvContainer("STRM", strm)), 0, 1);
+        assertEquals(1, s.size());
+        assertEquals(41.0082, s.getFirst().latitude(), 1e-6);
+        assertEquals(18.0, s.getFirst().speedKmh(), 1e-6);
+        assertEquals(Instant.parse("2026-11-01T12:00:00Z"), s.getFirst().time());
+    }
+
+    @Test
+    void djiLongtitudeSpelling() {
+        String srt = """
+                1
+                00:00:00,000 --> 00:00:01,000
+                [iso : 100] [latitude : 41.0082] [longtitude : 28.9784] [altitude: 120.5]
+                """;
+        TelemetrySample s = new DjiSrtParser(ZoneOffset.UTC).parse(srt).getFirst();
+        assertTrue(s.hasPosition());
+        assertEquals(28.9784, s.longitude(), 1e-6);
+        assertEquals(120.5, s.altitude(), 1e-6);
+    }
+
+    @Test
+    void iso6709DegreesMinutesSeconds() {
+        TelemetrySample dm = LocationTagParser.parseIso6709("+4100.492+02858.704/").orElseThrow();
+        assertEquals(41.0082, dm.latitude(), 1e-4);
+        assertEquals(28.9784, dm.longitude(), 1e-4);
+        TelemetrySample dms = LocationTagParser.parseIso6709("-410029.5-0285842.2/").orElseThrow();
+        assertEquals(-41.00819, dms.latitude(), 1e-4);
+        assertEquals(-28.97839, dms.longitude(), 1e-4);
+    }
+
+    @Test
     void iso6709LocationTag() {
         TelemetrySample s = LocationTagParser.parseIso6709("+41.0082+028.9784+039.000/").orElseThrow();
         assertEquals(41.0082, s.latitude(), 1e-6);

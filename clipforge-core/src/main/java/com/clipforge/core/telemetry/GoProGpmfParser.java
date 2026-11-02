@@ -19,7 +19,8 @@ import java.util.Optional;
 
 /**
  * GoPro GPMF ({@code gpmd} data track). Reads the GPS streams: {@code GPS5} (lat, lon, alt, 2D speed, 3D speed) or
- * {@code GPS9} (newer cameras), scaled by {@code SCAL}, with {@code GPSU} as UTC time. Other sensors (ACCL, GYRO)
+ * {@code GPS9} (HERO11+, complex type {@code lllllllSS} with its own date/time), scaled by {@code SCAL}; GPS5 uses
+ * {@code GPSU} as UTC time. Other sensors (ACCL, GYRO)
  * are ignored for now.
  */
 public final class GoProGpmfParser implements TelemetryParser {
@@ -87,7 +88,26 @@ public final class GoProGpmfParser implements TelemetryParser {
                 } catch (DateTimeParseException ignored) {
                     st.time = null;
                 }
-            } else if ((key.equals("GPS5") || key.equals("GPS9")) && type == 'l') {
+            } else if (key.equals("GPS9") && size >= 32) {
+                // HERO11+: lat, lon, alt, speed2D, speed3D, days since 2000, seconds since midnight (int32, scaled),
+                // DOP and fix (uint16); time comes from the sample itself
+                for (int r = 0; r < repeat; r++) {
+                    int at = data + r * size;
+                    double[] v = new double[7];
+                    for (int k = 0; k < 7; k++) {
+                        double scale = st.scale.length > k ? st.scale[k] : 1;
+                        v[k] = b.getInt(at + k * 4) / (scale == 0 ? 1 : scale);
+                    }
+                    double t = start + length * r / Math.max(1, repeat);
+                    Instant time = Instant.parse("2000-01-01T00:00:00Z").plus(Duration.ofDays((long) v[5]))
+                            .plusMillis(Math.round(v[6] * 1000));
+                    int fix = b.getShort(at + 30) & 0xffff;
+                    if (fix >= 2) { // 2D or 3D fix
+                        out.add(new TelemetrySample(Duration.ofMillis(Math.round(t * 1000)), time, v[0], v[1], v[2],
+                                v[3] * 3.6, null));
+                    }
+                }
+            } else if (key.equals("GPS5") && type == 'l') {
                 int values = size / 4;
                 for (int r = 0; r < repeat; r++) {
                     double[] v = new double[values];

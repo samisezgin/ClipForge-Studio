@@ -96,6 +96,15 @@ public final class AppSettings {
         prefs.put("lastOutputDir", dir == null ? "" : dir);
     }
 
+    /** Rescan the project folders automatically when clips appear (default on). */
+    public boolean watchFolders() {
+        return prefs.getBoolean("watchFolders", true);
+    }
+
+    public void setWatchFolders(boolean on) {
+        prefs.putBoolean("watchFolders", on);
+    }
+
     public String lastProject() {
         return prefs.get("lastProject", "");
     }

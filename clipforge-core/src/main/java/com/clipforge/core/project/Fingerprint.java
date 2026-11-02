@@ -15,8 +15,13 @@ public record Fingerprint(String path, long size, long modifiedMillis) {
     public boolean matchesDisk() {
         try {
             Path p = Path.of(path);
-            return Files.isRegularFile(p) && Files.size(p) == size
-                    && Files.getLastModifiedTime(p).toMillis() == modifiedMillis;
+            if (!Files.isRegularFile(p) || Files.size(p) != size) {
+                return false;
+            }
+            long diff = Math.abs(Files.getLastModifiedTime(p).toMillis() - modifiedMillis);
+            // FAT32 stores local time: Windows shows such files one hour off after a DST change; FAT also rounds
+            // to 2 s. Same size and such a shift means the same file.
+            return diff <= 2000 || Math.abs(diff - 3_600_000) <= 2000;
         } catch (IOException e) {
             return false;
         }

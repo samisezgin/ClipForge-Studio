@@ -12,7 +12,6 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
@@ -44,14 +43,18 @@ public final class SigmaStarParser implements TelemetryParser {
 
     @Override
     public Optional<Telemetry> parse(Path file, StreamTable streams, FfmpegTools tools) throws IOException {
-        Optional<StreamTable.Stream> meta = streams.streams().stream()
-                .filter(s -> s.codecTag().equals("ssmd") || s.handler().equals("SStarMeta"))
-                .max(Comparator.comparingInt(StreamTable.Stream::packets)); // the per-second track
-        if (meta.isEmpty()) {
-            return Optional.empty();
+        List<StreamTable.Stream> meta = streams.streams().stream()
+                .filter(s -> s.codecTag().equals("ssmd") || s.handler().equals("SStarMeta")).toList();
+        // the cameras write a one-packet header track and a per-second track; use the one with more packets
+        List<StreamTable.Packet> best = List.of();
+        for (StreamTable.Stream s : meta) {
+            List<StreamTable.Packet> packets = StreamTable.packets(file, s.index(), tools);
+            if (packets.size() > best.size()) {
+                best = packets;
+            }
         }
         List<TelemetrySample> samples = new ArrayList<>();
-        for (StreamTable.Packet p : StreamTable.packets(file, meta.get().index(), tools)) {
+        for (StreamTable.Packet p : best) {
             decode(p.data(), Duration.ofMillis(Math.round(p.time() * 1000))).ifPresent(samples::add);
         }
         return samples.isEmpty() ? Optional.empty() : Optional.of(new Telemetry(id(), samples));

@@ -5,6 +5,37 @@ each development phase is a minor release.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-02
+### Added
+- Telemetry tab completed: dash cam (SigmaStar) clock and GPS data, GoPro GPMF, DJI .SRT and phone location tags;
+  route preview, speed chart, GPX/CSV export, OpenStreetMap view in the browser.
+- "Burn date and time into the video" for compression: per-frame date/time stamp from the clip start times,
+  correct across segments and joined clips.
+- Folder watching (View menu, on by default): clips copied into a project folder appear without pressing Rescan.
+- Packaging scripts (`packaging/`) producing a self-contained app image with `jpackage`.
+- **Retry** for failed jobs (a compression keeps its encoded segments).
+- Log files in `~/.clipforge/logs` (Help ▸ Open log folder), including every FFmpeg command line.
+- Recovery dialog: "Sources unchanged, continue" for sources that only look changed (copied again, other drive).
+- About shows the version, the FFmpeg version and that FFmpeg is a separate program with its own licence.
+- Version with commit SHA in the status bar and About dialog, e.g. `v0.4.0 (c22a796)`, embedded at build time.
+
+### Fixed (review)
+- GoPro HERO11+ GPS9 data is read; DJI `longtitude` / `altitude` layouts; ISO 6709 degrees-minutes(-seconds).
+- Date/time stamp no longer up to a second early; single files use the same start-time rules as scanned clips;
+  a missing font is reported when the job is planned.
+- Telemetry stays visible across rescans; map page uses pinned Leaflet with integrity hashes and is cleaned up.
+- Folder watching survives removed drives and never reports for an old folder list.
+- File-time shifts of exactly one hour (FAT32 cards around DST changes) no longer count as a changed source.
+- Appending to the growing output retries when a video player briefly locks the file.
+- Packaging builds from a clean tree and reads the version from the POM.
+- Sources and music files are checked before every run, also when resuming within the same session; a change asks
+  the user instead of mixing old and new material.
+- ClipForge's own outputs and growing `.part` files are never listed as new clips (output folder = source folder).
+- Removing the last folder during a scan, or opening another project while a compression is being planned, no longer
+  leaves stale clips or queues jobs into the wrong project.
+- Stop now followed quickly by Resume no longer leaves the job stuck; starting a job while pausing keeps the pause.
+- "Remove audio" saved by 0.2 projects is kept; unknown merge modes or job states load safely.
+- A running sample encode is stopped on exit; status texts match the recovery behaviour.
 ## [0.3.0] - 2026-11-02
 ### Added
 - Audio panel shared by merging and compression: keep original audio, remove it, or background music.
@@ -27,7 +58,7 @@ each development phase is a minor release.
 - Without loop, the fade-out happens at the end of the music, not in the silence after it.
 - Long playlists are not decoded beyond the video length; RF64 for very long WAV intermediates.
 - Typed fade-out length is kept even without pressing Enter; music files are checked when a paused job resumes.
-- Intermediate files of merges with music are always removed; tolerant loading of partial or newer project files.
+- Intermediate files of merges with music are always removed; partial music settings and unknown audio modes load.
 
 ## [0.2.0] - 2026-11-02
 ### Added

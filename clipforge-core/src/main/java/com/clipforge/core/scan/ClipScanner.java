@@ -162,6 +162,9 @@ public final class ClipScanner {
 
     public static boolean isVideo(Path p) {
         String n = p.getFileName().toString();
+        if (n.contains(".part.")) {
+            return false; // a growing output written by ClipForge itself
+        }
         int dot = n.lastIndexOf('.');
         return dot > 0 && VIDEO_EXTENSIONS.contains(n.substring(dot + 1).toLowerCase(Locale.ROOT));
     }

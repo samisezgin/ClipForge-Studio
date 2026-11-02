@@ -31,6 +31,18 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class RealFootageCheck {
 
     @Test
+    void readRealTelemetry() throws Exception {
+        String clips = System.getProperty("clipforge.realClips");
+        assumeTrue(clips != null, "real footage not configured");
+        FfmpegTools tools = FfmpegTestSupport.requireFfmpeg();
+        var t = new com.clipforge.core.telemetry.TelemetryService(tools, java.time.ZoneId.systemDefault())
+                .read(Path.of(clips.split(";")[0]));
+        System.out.printf("TELEMETRY: source=%s samples=%d positions=%d first=%s last=%s%n", t.source(),
+                t.samples().size(), t.positionCount(), t.samples().isEmpty() ? null : t.samples().getFirst(),
+                t.samples().isEmpty() ? null : t.samples().getLast().time());
+    }
+
+    @Test
     void compressRealClips() throws Exception {
         String clips = System.getProperty("clipforge.realClips");
         String outDir = System.getProperty("clipforge.realOut");

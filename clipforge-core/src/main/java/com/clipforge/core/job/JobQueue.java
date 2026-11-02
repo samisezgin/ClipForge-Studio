@@ -39,6 +39,10 @@ public final class JobQueue {
 
         /** The worker stopped: no more pending jobs, or paused. */
         void idle();
+
+        /** A job was not started because its source or music files changed; it is PAUSED until the user decides. */
+        default void sourcesChanged(JobRecord job) {
+        }
     }
 
     private static final Logger LOG = Logger.getLogger(JobQueue.class.getName());
@@ -148,7 +152,13 @@ public final class JobQueue {
     /** Clears the pause flag and runs PENDING jobs only; jobs the user left PAUSED stay paused. */
     public void unpause() {
         pauseRequested = false;
+        stopNowRequested = false;
         start();
+    }
+
+    /** {@code true} while a pause was requested and the running job is still finishing its work in progress. */
+    public boolean isDraining() {
+        return pauseRequested && isRunning();
     }
 
     /** Cancels one job: running → stopped and its partial files removed; pending/paused → cancelled. */
@@ -168,6 +178,22 @@ public final class JobQueue {
         if (executor != null) {
             executor.discard(job); // e.g. a paused compression job's growing output and segments
         }
+    }
+
+    /**
+     * Runs a failed job again. A compression job keeps its encoded segments and growing output; the recovery step at
+     * its start checks them, so only the missing work is redone.
+     */
+    public void retry(JobRecord job) {
+        synchronized (project) {
+            if (job.getState() != JobState.FAILED) {
+                return;
+            }
+            job.clearError();
+            update(job, JobState.PENDING);
+        }
+        persist.run();
+        unpause();
     }
 
     /** Waits until the worker stopped. */
@@ -235,6 +261,19 @@ public final class JobQueue {
     }
 
     private void runJob(JobRecord job) {
+        // sources may have changed while the job was paused (not only between sessions): never mix old and new work
+        boolean changed = job.getSources().stream().anyMatch(f -> !f.matchesDisk())
+                || job.getMusicSources().stream().anyMatch(f -> !f.matchesDisk());
+        if (changed) {
+            synchronized (project) {
+                job.setErrorKey("error.sourceChanged");
+                update(job, JobState.PAUSED);
+                current = null;
+            }
+            persist.run();
+            listener.sourcesChanged(job);
+            return;
+        }
         JobExecutor.Outcome outcome;
         try {
             JobExecutor executor = executors.get(job.getType());
