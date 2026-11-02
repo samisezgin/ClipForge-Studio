@@ -29,6 +29,44 @@ public final class Project {
     private AudioMode audioMode = AudioMode.KEEP;
     private MusicSettings music = MusicSettings.DEFAULT;
     private List<JobRecord> jobs = new ArrayList<>();
+    /** Steps applied by one run: any combination of merge, speed-up and compression. */
+    private boolean stepMerge = true;
+    private boolean stepSpeed;
+    private boolean stepCompress;
+    private double speedFactor = 2;
+
+    public boolean isStepMerge() {
+        return stepMerge;
+    }
+
+    public void setStepMerge(boolean stepMerge) {
+        this.stepMerge = stepMerge;
+    }
+
+    public boolean isStepSpeed() {
+        return stepSpeed;
+    }
+
+    public void setStepSpeed(boolean stepSpeed) {
+        this.stepSpeed = stepSpeed;
+    }
+
+    public boolean isStepCompress() {
+        return stepCompress;
+    }
+
+    public void setStepCompress(boolean stepCompress) {
+        this.stepCompress = stepCompress;
+    }
+
+    public double getSpeedFactor() {
+        return speedFactor;
+    }
+
+    public void setSpeedFactor(double speedFactor) {
+        this.speedFactor = speedFactor >= CompressOptions.MIN_SPEED
+                ? Math.min(CompressOptions.MAX_SPEED, speedFactor) : 2;
+    }
 
     public int getFormatVersion() {
         return formatVersion;

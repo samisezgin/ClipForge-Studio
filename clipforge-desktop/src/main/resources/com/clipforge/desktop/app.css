@@ -19,6 +19,13 @@
     -fx-border-color: -color-border-default transparent transparent transparent;
 }
 
+.pipeline-panel {
+    -fx-background-color: -color-bg-default;
+    -fx-border-color: -color-border-default;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+}
+
 .quality-band {
     -fx-padding: 3 8 3 8;
     -fx-border-color: transparent;

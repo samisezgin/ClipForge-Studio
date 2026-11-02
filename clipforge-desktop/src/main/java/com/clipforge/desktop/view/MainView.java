@@ -92,23 +92,21 @@ public final class MainView {
 
         ClipTreeView tree = new ClipTreeView(controller, listeners);
         outputBox = new OutputFolderBox(controller, listeners);
-        MergePanel merge = new MergePanel(controller, listeners, this::merge);
-        compressPanel = new CompressPanel(controller, listeners, start -> {
-            if (start) {
-                compress();
-            } else {
-                sample();
-            }
-        });
+        PipelinePanel pipeline = new PipelinePanel(controller, listeners, this::run);
+        MergePanel merge = new MergePanel(controller, listeners);
+        compressPanel = new CompressPanel(controller, listeners, this::sample);
         javafx.scene.control.Tab mergeTab = new javafx.scene.control.Tab(Messages.get("merge.title"), merge);
+        javafx.scene.control.Tab speedTab = new javafx.scene.control.Tab(Messages.get("speed.title"),
+                new SpeedPanel(controller, listeners));
         javafx.scene.control.Tab compressTab = new javafx.scene.control.Tab(Messages.get("compress.title"), compressPanel);
         javafx.scene.control.Tab telemetryTab = new javafx.scene.control.Tab(Messages.get("telemetry.title"),
                 new TelemetryPanel(controller, host, listeners));
-        javafx.scene.control.TabPane tabs = new javafx.scene.control.TabPane(mergeTab, compressTab, telemetryTab);
+        javafx.scene.control.TabPane tabs = new javafx.scene.control.TabPane(mergeTab, speedTab, compressTab,
+                telemetryTab);
         tabs.setTabClosingPolicy(javafx.scene.control.TabPane.TabClosingPolicy.UNAVAILABLE);
         audioPanel = new AudioPanel(controller, listeners);
         AudioPanel audio = audioPanel;
-        VBox side = new VBox(10, outputBox, audio, tabs);
+        VBox side = new VBox(10, pipeline, outputBox, audio, tabs);
         side.setPadding(new Insets(12));
         side.getStyleClass().add("side-panel");
         javafx.scene.control.ScrollPane sideScroll = new javafx.scene.control.ScrollPane(side);
@@ -293,6 +291,15 @@ public final class MainView {
         File dir = dc.showDialog(stage);
         if (dir != null) {
             controller.addFolder(dir.toPath());
+        }
+    }
+
+    /** Runs the ticked steps: a lossless merge alone, or one encoding pass that joins, speeds up and compresses. */
+    private void run() {
+        switch (controller.runKind()) {
+            case MERGE -> merge();
+            case ENCODE -> compress();
+            case NONE -> error(Messages.get("pipeline.error.title"), Messages.get("pipeline.nothing"));
         }
     }
 

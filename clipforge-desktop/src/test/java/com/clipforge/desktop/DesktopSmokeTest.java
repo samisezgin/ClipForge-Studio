@@ -149,14 +149,48 @@ class DesktopSmokeTest {
                     assertEquals("aac", m.audioCodec(), "background music in " + f.getFileName());
                 }
             }
+            onFx(() -> {
+                // speed-up alone: every clip on its own, re-encoded close to the source
+                controller.setSteps(false, true, false);
+                controller.setSpeedFactor(3);
+                assertEquals(AppController.RunKind.ENCODE, controller.runKind());
+                AppController.CompressPlan speedOnly = controller.planCompress();
+                assertTrue(speedOnly.ok(), String.valueOf(speedOnly.errorKey()));
+                assertEquals(3, speedOnly.specs().size(), "one output per clip without merging");
+                for (var s : speedOnly.specs()) {
+                    var o = s.options();
+                    assertEquals(3, o.speed());
+                    assertEquals(o.profile().range(com.clipforge.core.compress.QualityBand.TRANSPARENT)[1], o.quality());
+                    assertTrue(s.output().endsWith("_3x.mp4"), s.output());
+                }
+                // all steps: joined per session, sped up and compressed with the compress tab's quality
+                controller.setSteps(true, true, true);
+                AppController.CompressPlan all = controller.planCompress();
+                assertEquals(2, all.specs().size(), "one output per session");
+                assertEquals(controller.compressOptions().quality(), all.specs().getFirst().options().quality());
+                assertEquals(3, all.specs().getFirst().options().speed());
+                controller.setSteps(true, false, false);
+                assertEquals(AppController.RunKind.MERGE, controller.runKind());
+                return null;
+            });
             Stage musicStage = onFx(() -> {
                 stage.close();
                 return show(controller, "en");
             });
             stageRef[0] = musicStage;
+            snapshot(stageRef[0], OUT.resolve("ui-steps-en.png")); // steps panel at the top of the side panel
             onFx(() -> {
                 var tabs = (javafx.scene.control.TabPane) stageRef[0].getScene().lookup(".tab-pane");
-                tabs.getSelectionModel().select(1);
+                tabs.getSelectionModel().select(1); // speed up
+                sideScroll(stageRef[0]).setVvalue(1);
+                return null;
+            });
+            Thread.sleep(300);
+            snapshot(stageRef[0], OUT.resolve("ui-speed-en.png"));
+            onFx(() -> {
+                var tabs = (javafx.scene.control.TabPane) stageRef[0].getScene().lookup(".tab-pane");
+                tabs.getSelectionModel().select(2); // compress
+                sideScroll(stageRef[0]).setVvalue(1);
                 return null;
             });
             Thread.sleep(300);
@@ -190,6 +224,12 @@ class DesktopSmokeTest {
         s.setScene(scene);
         s.show();
         return s;
+    }
+
+    private static javafx.scene.control.ScrollPane sideScroll(Stage stage) {
+        return stage.getScene().getRoot().lookupAll(".scroll-pane").stream()
+                .filter(n -> n.getStyleClass().contains("side-panel"))
+                .map(n -> (javafx.scene.control.ScrollPane) n).findFirst().orElseThrow();
     }
 
     private static void snapshot(Stage stage, Path file) throws Exception {
