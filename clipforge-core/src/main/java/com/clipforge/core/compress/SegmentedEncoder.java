@@ -314,7 +314,7 @@ public final class SegmentedEncoder implements JobExecutor {
             return failure;
         }
         if (ctx.cancelRequested()) {
-            return cancelAndClean(spec);
+            return cancelAndClean(job, spec);
         }
         boolean complete = state.getSegments().stream().allMatch(s -> s.getState() == SegmentState.APPENDED);
         return complete ? null : Outcome.PAUSED; // paused or stopped; resumes from the segment table
@@ -516,7 +516,7 @@ public final class SegmentedEncoder implements JobExecutor {
                     spec.options().outputMs(spec.totalDurationMs()) / 1000.0, original, work, audio, token);
             if (r.cancelled()) {
                 Files.deleteIfExists(audio);
-                return ctx.cancelRequested() ? cancelAndClean(spec) : Outcome.PAUSED;
+                return ctx.cancelRequested() ? cancelAndClean(job, spec) : Outcome.PAUSED;
             }
             if (!r.success()) {
                 Files.deleteIfExists(audio);
@@ -555,7 +555,7 @@ public final class SegmentedEncoder implements JobExecutor {
                 FfmpegResult r = FfmpegProcess.run(cmd, Duration.ZERO, null, token);
                 if (r.cancelled()) {
                     Files.deleteIfExists(audio);
-                    return ctx.cancelRequested() ? cancelAndClean(spec) : Outcome.PAUSED;
+                    return ctx.cancelRequested() ? cancelAndClean(job, spec) : Outcome.PAUSED;
                 }
                 if (r.success()) {
                     return null;
@@ -577,7 +577,12 @@ public final class SegmentedEncoder implements JobExecutor {
         Path audio = work.resolve("audio.m4a");
         boolean withAudio = keepsAudio(spec);
         if (withAudio && !Files.isRegularFile(audio)) {
-            // deleted meanwhile (e.g. by a clean-up tool): prepare it again
+            // deleted meanwhile (e.g. by a clean-up tool): prepare it again - impossible if sources are gone
+            String gone = job.getDeletedSources().stream().filter(p -> !Files.exists(Path.of(p))).findFirst()
+                    .orElse(null);
+            if (gone != null) {
+                return fail(job, ctx, "error.sourceDeleted", null, Path.of(gone).getFileName().toString());
+            }
             synchronized (ctx.lock()) {
                 state.setAudioReady(false);
             }
@@ -624,7 +629,7 @@ public final class SegmentedEncoder implements JobExecutor {
         }
         if (r.cancelled()) {
             Files.deleteIfExists(muxed);
-            return ctx.cancelRequested() ? cancelAndClean(spec) : Outcome.PAUSED;
+            return ctx.cancelRequested() ? cancelAndClean(job, spec) : Outcome.PAUSED;
         }
         if (!r.success()) {
             Files.deleteIfExists(muxed);
@@ -635,7 +640,8 @@ public final class SegmentedEncoder implements JobExecutor {
         return Outcome.DONE;
     }
 
-    private static Outcome cancelAndClean(CompressSpec spec) throws IOException {
+    private static Outcome cancelAndClean(JobRecord job, CompressSpec spec) throws IOException {
+        CompressRecovery.preservePartial(job); // the only copy of sources deleted during the work
         CompressRecovery.cleanUp(spec, false);
         return Outcome.CANCELLED;
     }

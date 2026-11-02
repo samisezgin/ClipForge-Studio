@@ -3,6 +3,7 @@ package com.clipforge.core.job;
 import com.clipforge.core.mp4.Mp4Reader;
 import com.clipforge.core.project.Fingerprint;
 import com.clipforge.core.project.JobRecord;
+import com.clipforge.core.project.JobState;
 import com.clipforge.core.project.Project;
 import com.clipforge.core.project.SourceDeletion;
 import com.clipforge.core.util.RecycleBin;
@@ -11,6 +12,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.logging.Logger;
 
 /**
@@ -39,11 +41,26 @@ public final class SourceCleanup {
 
     private final Project project;
     private final Remover remover;
+    private final Runnable persist;
 
-    public SourceCleanup(Project project, Remover remover) {
+    /** @param persist saves the project (a deletion is recorded before the file is removed) */
+    public SourceCleanup(Project project, Remover remover, Runnable persist) {
         this.project = project;
         this.remover = remover;
+        this.persist = persist;
     }
+
+    /**
+     * Comparable form of a path: the same file written as {@code C:\a.mp4} and {@code c:\A.MP4} must count as one
+     * (Windows file names are case-insensitive).
+     */
+    static String key(String path) {
+        String p = Path.of(path).toAbsolutePath().normalize().toString();
+        return WINDOWS ? p.toLowerCase(Locale.ROOT) : p;
+    }
+
+    private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT)
+            .startsWith("windows");
 
     /** After a job finished: deletes all its remaining sources, if its output is complete. */
     public void afterDone(JobRecord job) {
@@ -75,7 +92,7 @@ public final class SourceCleanup {
         }
         Fingerprint f;
         synchronized (project) {
-            f = job.getSources().stream().filter(s -> s.path().equals(path)).findFirst().orElse(null);
+            f = job.getSources().stream().filter(s -> key(s.path()).equals(key(path))).findFirst().orElse(null);
         }
         if (f != null) {
             delete(job, f);
@@ -88,9 +105,11 @@ public final class SourceCleanup {
             if (job.getDeletedSources().contains(path) || job.getKeptSources().contains(path)) {
                 return;
             }
+            // every job that may still run needs its sources: pending, running, paused, and failed (can be retried)
+            String k = key(path);
             boolean neededElsewhere = project.getJobs().stream().anyMatch(other -> other != job
-                    && other.getState().unfinished()
-                    && other.getSources().stream().anyMatch(s -> s.path().equals(path)));
+                    && other.getState() != JobState.DONE && other.getState() != JobState.CANCELLED
+                    && other.getSources().stream().anyMatch(s -> key(s.path()).equals(k)));
             if (neededElsewhere) {
                 LOG.info("Kept " + path + ": another job still needs it");
                 keep(job, path);
@@ -111,19 +130,21 @@ public final class SourceCleanup {
             return;
         }
         boolean permanent = job.getSourceDeletion().permanent();
+        // recorded and saved first: after a crash in between the file is at worst kept, never gone unrecorded
+        synchronized (project) {
+            job.getDeletedSources().add(path);
+        }
+        persist.run();
+        boolean gone = false;
         try {
-            boolean gone = remover.remove(Path.of(path), permanent);
-            synchronized (project) {
-                if (gone) {
-                    job.getDeletedSources().add(path);
-                } else {
-                    keep(job, path);
-                }
-            }
+            gone = remover.remove(Path.of(path), permanent);
             LOG.info((gone ? (permanent ? "Deleted permanently: " : "Moved to the Recycle Bin: ") : "Kept: ") + path);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             LOG.warning("Could not delete " + path + ": " + e.getMessage());
+        }
+        if (!gone) {
             synchronized (project) {
+                job.getDeletedSources().remove(path);
                 keep(job, path);
             }
         }

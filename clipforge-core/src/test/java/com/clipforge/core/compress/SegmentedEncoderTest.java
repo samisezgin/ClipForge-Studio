@@ -271,6 +271,27 @@ class SegmentedEncoderTest {
     }
 
     @Test
+    void cancellingAfterADeletionKeepsThePartialOutput() throws Exception {
+        List<Path> clips = twoClips("delete-cancel");
+        JobRecord job = jobFor(clips, new SourceDeletion(SourceDeletion.When.DURING, true), "cancel");
+        JobQueue[] queue = new JobQueue[1];
+        queue[0] = new JobQueue(project, Map.<JobType, JobExecutor>of(JobType.COMPRESS, new SegmentedEncoder(tools)),
+                () -> { }, new Noop(), Clock.systemUTC(), (file, permanent) -> {
+                    Files.delete(file);
+                    queue[0].cancel(job); // the user cancels right after the first source went
+                    return true;
+                });
+        queue[0].submit(List.of(job));
+        assertTrue(queue[0].awaitIdle(Duration.ofMinutes(3)));
+        assertEquals(JobState.CANCELLED, job.getState());
+        assertFalse(Files.exists(clips.get(0)), "first source deleted");
+        assertTrue(job.getKeptPartial() != null && Files.size(Path.of(job.getKeptPartial())) > 0,
+                "its only copy, the partial output, is kept: " + job.getKeptPartial());
+        assertTrue(Path.of(job.getKeptPartial()).getFileName().toString().endsWith("_incomplete.mp4"));
+        assertTrue(frames(Path.of(job.getKeptPartial())) >= 180, "the deleted clip is in it");
+    }
+
+    @Test
     void deletesAfterTheJobButKeepsSourcesOtherJobsNeed() throws Exception {
         List<Path> clips = twoClips("delete-after");
         JobRecord job = jobFor(clips, new SourceDeletion(SourceDeletion.When.AFTER, false), "after");

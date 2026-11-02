@@ -1386,7 +1386,7 @@ public final class AppController {
                         if (i.job().getCompress() != null) {
                             if (video) {
                                 // segments encoded from the old source must not be joined with new ones
-                                CompressRecovery.restart(i.job().getCompress());
+                                CompressRecovery.restart(i.job()); // keeps the partial output if sources were deleted
                             } else {
                                 i.job().getCompress().setAudioReady(false); // only the music changed
                             }

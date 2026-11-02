@@ -78,7 +78,7 @@ public final class JobQueue {
         this.persist = persist;
         this.listener = listener;
         this.clock = clock;
-        this.cleanup = new SourceCleanup(project, remover);
+        this.cleanup = new SourceCleanup(project, remover, persist);
     }
 
     /** Merge-only queue (used by tests and simple callers). */

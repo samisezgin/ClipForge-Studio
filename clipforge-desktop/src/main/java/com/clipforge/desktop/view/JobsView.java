@@ -245,6 +245,9 @@ public final class JobsView extends VBox {
             if (!job.getKeptSources().isEmpty()) {
                 parts.add(Messages.get("jobs.kept", job.getKeptSources().size()));
             }
+            if (job.getKeptPartial() != null) {
+                parts.add(Messages.get("jobs.partialKept", Path.of(job.getKeptPartial()).getFileName()));
+            }
             return parts.isEmpty() ? null : String.join(" · ", parts);
         }
     }

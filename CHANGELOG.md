@@ -4,6 +4,8 @@ All notable changes are documented here. Versions follow [Semantic Versioning](h
 each development phase is a minor release.
 
 ## [Unreleased]
+
+## [1.2.0] - 2026-11-03
 ### Added
 - **Delete source files** (steps panel): on Start a dialog asks whether to delete the sources during the work
   (each source as soon as its part is safely in the output; re-encoding jobs only) or after the work (once the output

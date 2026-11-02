@@ -35,6 +35,17 @@ public final class JobRecord {
     /** Sources that were to be deleted but were kept, e.g. still used by another job or changed meanwhile. */
     private List<String> keptSources = new ArrayList<>();
 
+    /** Partial output kept because sources were deleted during the work and the job was cancelled or restarted. */
+    private String keptPartial;
+
+    public String getKeptPartial() {
+        return keptPartial;
+    }
+
+    public void setKeptPartial(String keptPartial) {
+        this.keptPartial = keptPartial;
+    }
+
     public SourceDeletion getSourceDeletion() {
         return sourceDeletion;
     }
