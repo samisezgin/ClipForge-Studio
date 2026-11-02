@@ -18,7 +18,10 @@ To add a language:
    [IETF language tag](https://en.wikipedia.org/wiki/IETF_language_tag) using underscores (e.g. `de`, `pt_BR`).
 2. Translate the values (keep keys and `{0}` placeholders). Files are UTF-8.
 3. Set `language.name` to the language's own name (e.g. `Deutsch`).
-4. Either open a pull request with the file, or drop it into a `lang/` folder next to the application
-   (or `~/.clipforge/lang/`) — ClipForge discovers it on start-up without rebuilding.
+4. Either open a pull request with the file, or drop it into a `lang/` folder next to the application jar
+   or into `~/.clipforge/lang/` — ClipForge discovers it on start-up without rebuilding.
+
+Values are `java.text.MessageFormat` patterns: keep `{0}` placeholders and write a literal apostrophe as `''`.
+Run `./mvnw verify` — a test fails if the Turkish bundle misses a key; add your language there too.
 
 Missing keys fall back to English.

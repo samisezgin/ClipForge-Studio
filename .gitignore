@@ -22,7 +22,8 @@ test-output/
 *.mov
 *.m4v
 *.avi
-*.ts
+*.mts
+*.m2ts
 *.m4a
 *.mp3
 *.wav

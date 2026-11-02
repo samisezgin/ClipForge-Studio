@@ -1,0 +1,3 @@
+# Bundled UI languages (IETF tags with underscores). English is the default and fallback.
+en
+tr
