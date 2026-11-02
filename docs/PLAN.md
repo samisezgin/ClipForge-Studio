@@ -26,7 +26,8 @@ performance impact.
   `ClipScanner` (multiple folders, marks files still being copied / unreadable, rescan);
   session split when `next.start > prev.start + prev.duration + 5 s`; channel (F/R) and codec/resolution split groups.
 - `MergeService`: UTF-8 concat list, `-map 0:v -map 0:a? -ignore_unknown -c copy`, `-fflags +genpts` retry,
-  optional `+faststart`, experimental "keep data streams" (MKV + `-copy_unknown`).
+  optional `+faststart`. Camera data streams (SigmaStar `ssmd`) cannot be muxed by FFmpeg into MP4/MOV/MKV and are
+  dropped; telemetry export is phase 4.
 - `FfmpegLocator`, `FfmpegJob` (progress/ETA/cancel), `DiskCheck` (free space, FAT32 4 GB limit).
 - UI: add folders, Day ▸ Session ▸ Clip tree with checkboxes and gap markers, merge mode, output folder, job queue.
 - Project file (`.cfproj`, JSON) with folders, selections, settings, job queue and job states; atomic auto-save;

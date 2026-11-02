@@ -1,0 +1,167 @@
+package com.clipforge.desktop.view;
+
+import atlantafx.base.theme.Styles;
+import com.clipforge.core.ffmpeg.Progress;
+import com.clipforge.core.i18n.Messages;
+import com.clipforge.core.project.JobRecord;
+import com.clipforge.core.project.JobState;
+import com.clipforge.core.util.Formats;
+import com.clipforge.desktop.AppController;
+import javafx.application.HostServices;
+import javafx.collections.MapChangeListener;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.ListView;
+import javafx.scene.control.ProgressBar;
+import javafx.scene.control.Tooltip;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+
+/** Job queue with per-job progress and queue controls (pause / stop now / resume). */
+public final class JobsView extends VBox {
+
+    private final AppController controller;
+    private final HostServices host;
+    private final ListView<JobRecord> list = new ListView<>();
+
+    public JobsView(AppController controller, HostServices host) {
+        this.controller = controller;
+        this.host = host;
+        setSpacing(6);
+        setPadding(new Insets(8, 12, 8, 12));
+        getStyleClass().add("jobs-view");
+
+        Label title = new Label(Messages.get("jobs.title"));
+        title.getStyleClass().add(Styles.TITLE_4);
+
+        Button pause = new Button(Messages.get("jobs.pause"));
+        pause.setTooltip(new Tooltip(Messages.get("jobs.pause.tip")));
+        pause.setOnAction(e -> controller.pauseQueue());
+        Button stop = new Button(Messages.get("jobs.stopNow"));
+        stop.setTooltip(new Tooltip(Messages.get("jobs.stopNow.tip")));
+        stop.getStyleClass().add(Styles.DANGER);
+        stop.setOnAction(e -> controller.stopQueueNow());
+        Button resume = new Button(Messages.get("jobs.resume"));
+        resume.getStyleClass().add(Styles.SUCCESS);
+        resume.setOnAction(e -> controller.resumeQueue());
+        Button clear = new Button(Messages.get("jobs.clearFinished"));
+        clear.setOnAction(e -> controller.clearFinishedJobs());
+
+        pause.disableProperty().bind(controller.queueRunningProperty().not()
+                .or(controller.queuePausedProperty()));
+        stop.disableProperty().bind(controller.queueRunningProperty().not());
+        resume.disableProperty().bind(controller.queuePausedProperty().not());
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox header = new HBox(8, title, spacer, pause, stop, resume, clear);
+        header.setAlignment(Pos.CENTER_LEFT);
+
+        list.setItems(controller.jobs());
+        list.setCellFactory(l -> new JobCell());
+        list.setPlaceholder(new Label(Messages.get("jobs.empty")));
+        list.setPrefHeight(170);
+        VBox.setVgrow(list, Priority.ALWAYS);
+
+        controller.progress().addListener((MapChangeListener<String, Progress>) c -> list.refresh());
+        getChildren().addAll(header, list);
+    }
+
+    private final class JobCell extends ListCell<JobRecord> {
+        private final Label name = new Label();
+        private final Label state = new Label();
+        private final Label detail = new Label();
+        private final ProgressBar bar = new ProgressBar(0);
+        private final Button cancel = new Button(Messages.get("common.cancel"));
+        private final Button open = new Button(Messages.get("jobs.openFolder"));
+        private final VBox box;
+
+        JobCell() {
+            name.getStyleClass().add(Styles.TEXT_BOLD);
+            detail.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
+            bar.setMaxWidth(Double.MAX_VALUE);
+            cancel.getStyleClass().addAll(Styles.SMALL, Styles.FLAT);
+            open.getStyleClass().addAll(Styles.SMALL, Styles.FLAT);
+            Region spacer = new Region();
+            HBox.setHgrow(spacer, Priority.ALWAYS);
+            HBox top = new HBox(8, name, state, spacer, open, cancel);
+            top.setAlignment(Pos.CENTER_LEFT);
+            box = new VBox(4, top, bar, detail);
+        }
+
+        @Override
+        protected void updateItem(JobRecord job, boolean empty) {
+            super.updateItem(job, empty);
+            if (empty || job == null) {
+                setGraphic(null);
+                return;
+            }
+            Path out = Path.of(job.output());
+            name.setText(out.getFileName().toString());
+            JobState s = job.getState();
+            state.setText(Messages.get("jobs.state." + s.name().toLowerCase()));
+            state.getStyleClass().removeAll(Styles.SUCCESS, Styles.DANGER, Styles.WARNING, Styles.ACCENT);
+            state.getStyleClass().add(switch (s) {
+                case DONE -> Styles.SUCCESS;
+                case FAILED -> Styles.DANGER;
+                case PAUSED, CANCELLED -> Styles.WARNING;
+                default -> Styles.ACCENT;
+            });
+
+            Progress p = controller.progress().get(job.getId());
+            Duration total = Duration.ofMillis(job.getMerge().totalDurationMs());
+            switch (s) {
+                case DONE -> {
+                    bar.setProgress(1);
+                    detail.setText(Messages.get("jobs.detail.done", Formats.duration(total),
+                            Formats.size(sizeOf(out))));
+                }
+                case RUNNING -> {
+                    bar.setProgress(p == null || p.fraction() < 0 ? ProgressBar.INDETERMINATE_PROGRESS : p.fraction());
+                    detail.setText(p == null ? Messages.get("jobs.detail.starting")
+                            : Messages.get("jobs.detail.running", Formats.duration(p.processed()),
+                            Formats.duration(total), String.format("%.1f", p.speed()),
+                            Formats.duration(p.eta()), Formats.size(p.outputBytes())));
+                }
+                case FAILED -> {
+                    bar.setProgress(0);
+                    String msg = Messages.get(job.getErrorKey() == null ? "error.unknown" : job.getErrorKey(),
+                            job.getErrorArgs().toArray());
+                    detail.setText(msg);
+                    setTooltip(job.getErrorDetail() == null ? null : new Tooltip(job.getErrorDetail()));
+                }
+                default -> {
+                    bar.setProgress(0);
+                    detail.setText(Messages.get("jobs.detail.inputs", job.getMerge().inputs().size(),
+                            Formats.duration(total), Formats.size(job.getMerge().totalBytes())));
+                }
+            }
+            bar.setVisible(s == JobState.RUNNING);
+            bar.setManaged(s == JobState.RUNNING);
+            cancel.setVisible(s.unfinished());
+            cancel.setManaged(s.unfinished());
+            cancel.setOnAction(e -> controller.cancelJob(job));
+            open.setVisible(s == JobState.DONE);
+            open.setManaged(s == JobState.DONE);
+            open.setOnAction(e -> host.showDocument(out.toAbsolutePath().getParent().toUri().toString()));
+            setGraphic(box);
+        }
+
+        private long sizeOf(Path p) {
+            try {
+                return Files.size(p);
+            } catch (Exception e) {
+                return -1;
+            }
+        }
+    }
+}

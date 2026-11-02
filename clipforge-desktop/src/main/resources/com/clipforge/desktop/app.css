@@ -1,0 +1,24 @@
+.clip-tree .row-day .check-box {
+    -fx-font-weight: bold;
+}
+
+.clip-tree .row-session .check-box {
+    -fx-text-fill: -color-accent-fg;
+}
+
+.clip-tree .row-disabled .check-box {
+    -fx-opacity: 0.55;
+}
+
+.side-panel {
+    -fx-background-color: -color-bg-subtle;
+}
+
+.status-bar {
+    -fx-background-color: -color-bg-subtle;
+    -fx-border-color: -color-border-default transparent transparent transparent;
+}
+
+.jobs-view .list-cell {
+    -fx-padding: 6 8 6 8;
+}
