@@ -40,13 +40,16 @@ class RealFootageCheck {
         List<String> inputs = Arrays.asList(clips.split(";"));
         long ms = 0;
         long bytes = 0;
+        List<CompressInput> sources = new ArrayList<>();
         for (String in : inputs) {
-            ms += probe.probe(Path.of(in)).orElseThrow().duration().toMillis();
+            MediaInfo info = probe.probe(Path.of(in)).orElseThrow();
+            sources.add(CompressInput.of(Path.of(in), info));
+            ms += info.duration().toMillis();
             bytes += Files.size(Path.of(in));
         }
         CompressOptions o = CompressOptions.defaults(EncoderProfile.AV1_NVENC);
         Path out = Files.createDirectories(Path.of(outDir)).resolve("real_compressed_" + System.currentTimeMillis() + ".mp4");
-        CompressSpec spec = new CompressSpec(inputs, out.toString(), o, ms, bytes, true);
+        CompressSpec spec = new CompressSpec(sources, out.toString(), o, ms, bytes, true);
         Project project = new Project();
         JobRecord job = JobRecord.compress(spec, List.of(), Clock.systemUTC().instant());
         List<Double> speeds = new ArrayList<>();

@@ -30,12 +30,18 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
  * Compresses a video in independent time segments and appends each finished segment, in order, to a growing
  * fragmented MP4 ({@code <name>.part.mp4}) that can be played while encoding. When all segments are in, the video
  * is muxed with the audio track into the final MP4 (standard layout, index at the front).
+ * <p>
+ * Segments never cross source boundaries. Each is cut from one file with accurate input seeking and a {@code trim}
+ * on the source's own timestamps ({@code -copyts}, offset by the stream's {@code start_time}), which selects every
+ * frame exactly once. On append, a segment is anchored at its planned position on the output timeline, so frame
+ * timing errors cannot accumulate over hours of footage.
  * <p>
  * Pause lets running segments finish; stop-now discards them. Either way the job resumes from the segment table in
  * the project file, after {@link CompressRecovery#reconcile} has checked the files on disk (docs/RECOVERY.md).
@@ -48,6 +54,8 @@ public final class SegmentedEncoder implements JobExecutor {
     /** Target wall-clock work per segment for the automatic segment length. */
     private static final double TARGET_SEGMENT_WORK_SECONDS = 50;
     private static final long MIN_TAIL_MS = 5_000;
+    /** Rough output/input size ratio before anything has been encoded (for the free-space check). */
+    private static final double INITIAL_SIZE_RATIO = 0.4;
 
     private final FfmpegTools tools;
 
@@ -62,9 +70,13 @@ public final class SegmentedEncoder implements JobExecutor {
     public Outcome execute(JobRecord job, JobContext ctx) throws IOException {
         CompressState state = job.getCompress();
         CompressSpec spec = state.getSpec();
+        if (spec.sources().isEmpty()) {
+            return fail(job, ctx, "error.internal", "job has no sources", "CompressSpec");
+        }
         Path out = Path.of(spec.output());
         Path part = CompressRecovery.partFile(spec);
         Path work = CompressRecovery.workDir(spec);
+        Path audio = work.resolve("audio.m4a");
 
         if (Files.exists(out)) {
             boolean allAppended = !state.getSegments().isEmpty()
@@ -79,19 +91,21 @@ public final class SegmentedEncoder implements JobExecutor {
         Files.createDirectories(work);
         synchronized (ctx.lock()) {
             if (state.getSegments().isEmpty()) {
-                state.getSegments().addAll(plan(0, spec.totalDurationMs(), segmentMs(spec.options(), 0), 0));
+                state.getSegments().addAll(plan(spec, segmentMs(spec.options(), 0), 0, 0, 0));
             }
             CompressRecovery.reconcile(state);
+            if (state.isAudioReady() && !Files.isRegularFile(audio)) {
+                state.setAudioReady(false); // the work folder was cleaned up meanwhile: extract again
+            }
         }
         ctx.save();
 
-        Outcome space = checkSpace(job, ctx, state, out);
+        Outcome space = checkSpace(job, ctx, state, out, false);
         if (space != null) {
             return space;
         }
-        List<String> input = inputArgs(spec, work);
-        if (spec.options().audio() == AudioMode.KEEP && spec.sourceHasAudio() && !state.isAudioReady()) {
-            Outcome a = prepareAudio(job, ctx, input, work.resolve("audio.m4a"));
+        if (keepsAudio(spec) && !state.isAudioReady()) {
+            Outcome a = prepareAudio(job, ctx, spec, work, audio);
             if (a != null) {
                 return a;
             }
@@ -101,27 +115,47 @@ public final class SegmentedEncoder implements JobExecutor {
             ctx.save();
         }
 
-        Outcome o = encodeSegments(job, ctx, state, input, part);
+        Outcome o = encodeSegments(job, ctx, state, part);
         if (o != null) {
             return o;
+        }
+        Outcome finalSpace = checkSpace(job, ctx, state, out, true);
+        if (finalSpace != null) {
+            return finalSpace;
         }
         return finish(job, ctx, state, part, work, out);
     }
 
-    // ------------------------------------------------------------------ segments
+    @Override
+    public void discard(JobRecord job) {
+        CompressRecovery.discard(job);
+    }
 
-    /** Plans segments of {@code lengthMs} covering [fromMs, toMs); a short tail is merged into the last segment. */
-    static List<SegmentRecord> plan(long fromMs, long toMs, long lengthMs, int firstIndex) {
+    private static boolean keepsAudio(CompressSpec spec) {
+        return spec.options().audio() == AudioMode.KEEP && spec.sourceHasAudio();
+    }
+
+    // ------------------------------------------------------------------ planning
+
+    /**
+     * Plans segments of about {@code lengthMs} from source {@code fromInput} at {@code fromLocalMs} to the end of the
+     * last source. Segments never cross sources; a short tail is merged into the previous segment of the same source.
+     */
+    static List<SegmentRecord> plan(CompressSpec spec, long lengthMs, int fromInput, long fromLocalMs, int firstIndex) {
         List<SegmentRecord> list = new ArrayList<>();
-        long start = fromMs;
         int index = firstIndex;
-        while (start < toMs) {
-            long end = Math.min(toMs, start + lengthMs);
-            if (toMs - end < MIN_TAIL_MS) {
-                end = toMs;
+        for (int i = fromInput; i < spec.sources().size(); i++) {
+            long duration = spec.sources().get(i).durationMs();
+            long offset = spec.offsetMs(i);
+            long local = i == fromInput ? fromLocalMs : 0;
+            while (local < duration) {
+                long end = Math.min(duration, local + lengthMs);
+                if (duration - end < MIN_TAIL_MS) {
+                    end = duration;
+                }
+                list.add(new SegmentRecord(index++, i, local, offset + local, offset + end));
+                local = end;
             }
-            list.add(new SegmentRecord(index++, start, end));
-            start = end;
         }
         return list;
     }
@@ -137,7 +171,41 @@ public final class SegmentedEncoder implements JobExecutor {
         return o.profile().defaultSegmentSeconds() * 1000L;
     }
 
-    private Outcome encodeSegments(JobRecord job, JobContext ctx, CompressState state, List<String> input, Path part)
+    /**
+     * After the first segment of an automatic-length job, re-plan the untouched tail so each segment takes about
+     * {@link #TARGET_SEGMENT_WORK_SECONDS} of work at the measured speed. Caller holds the project monitor.
+     */
+    private static void maybeReplan(CompressState state, SegmentResult r, int concurrency) {
+        if (state.getMeasuredSpeed() > 0 || r.wallSeconds() <= 0) {
+            return;
+        }
+        // with parallel segments one encoder only gets a share of the hardware; this is a per-encoder speed
+        double speed = r.segment().durationMs() / 1000.0 / r.wallSeconds();
+        state.setMeasuredSpeed(speed);
+        CompressSpec spec = state.getSpec();
+        if (spec.options().segmentSeconds() > 0) {
+            return;
+        }
+        List<SegmentRecord> segs = state.getSegments();
+        int firstUntouched = segs.size();
+        for (int i = segs.size() - 1; i >= 0 && segs.get(i).getState() == SegmentState.PENDING; i--) {
+            firstUntouched = i;
+        }
+        if (firstUntouched >= segs.size()) {
+            return;
+        }
+        SegmentRecord first = segs.get(firstUntouched);
+        List<SegmentRecord> tail = plan(spec, segmentMs(spec.options(), speed), first.getInput(),
+                first.getLocalStartMs(), first.getIndex());
+        segs.subList(firstUntouched, segs.size()).clear();
+        segs.addAll(tail);
+        LOG.info(() -> String.format(Locale.ROOT, "Measured %.1fx per encoder (%d parallel), re-planned %d segments",
+                speed, concurrency, tail.size()));
+    }
+
+    // ------------------------------------------------------------------ encoding
+
+    private Outcome encodeSegments(JobRecord job, JobContext ctx, CompressState state, Path part)
             throws IOException {
         CompressSpec spec = state.getSpec();
         int concurrency = spec.options().concurrency();
@@ -159,7 +227,7 @@ public final class SegmentedEncoder implements JobExecutor {
                         CancellationToken token = new CancellationToken();
                         ctx.track(token);
                         running.put(next, token);
-                        done.submit(() -> encode(spec, input, next, token, p -> {
+                        done.submit(() -> encode(spec, next, token, p -> {
                             live.put(next, p);
                             report(ctx, state, live);
                         }));
@@ -173,17 +241,18 @@ public final class SegmentedEncoder implements JobExecutor {
                     continue;
                 }
                 SegmentResult r = get(f);
-                running.remove(r.segment());
-                live.remove(r.segment());
+                ctx.untrack(running.remove(r.segment()));
                 Path temp = CompressRecovery.segmentFile(spec, r.segment());
                 if (r.result().success()) {
                     synchronized (ctx.lock()) {
                         r.segment().setState(SegmentState.ENCODED);
-                        maybeReplan(state, r);
+                        maybeReplan(state, r, concurrency);
                     }
+                    live.remove(r.segment());
                     ctx.save();
                     base = appendReady(ctx, state, part, base);
                 } else {
+                    live.remove(r.segment());
                     Files.deleteIfExists(temp);
                     synchronized (ctx.lock()) {
                         r.segment().setState(SegmentState.PENDING);
@@ -199,7 +268,6 @@ public final class SegmentedEncoder implements JobExecutor {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            running.values().forEach(CancellationToken::cancel);
             throw new IOException("Interrupted", e);
         } finally {
             // on errors, never leave encoders running in the background
@@ -213,14 +281,10 @@ public final class SegmentedEncoder implements JobExecutor {
             return failure;
         }
         if (ctx.cancelRequested()) {
-            CompressRecovery.cleanUp(spec, false);
-            return Outcome.CANCELLED;
+            return cancelAndClean(spec);
         }
         boolean complete = state.getSegments().stream().allMatch(s -> s.getState() == SegmentState.APPENDED);
-        if (!complete) {
-            return Outcome.PAUSED; // paused or stopped; resumes from the segment table
-        }
-        return null;
+        return complete ? null : Outcome.PAUSED; // paused or stopped; resumes from the segment table
     }
 
     private static SegmentRecord nextPending(JobContext ctx, CompressState state) {
@@ -233,36 +297,6 @@ public final class SegmentedEncoder implements JobExecutor {
             }
             return null;
         }
-    }
-
-    /**
-     * After the first segment of an automatic-length job, re-plan the untouched tail so each segment takes about
-     * {@link #TARGET_SEGMENT_WORK_SECONDS} of work at the measured speed. Caller holds the project monitor.
-     */
-    private static void maybeReplan(CompressState state, SegmentResult r) {
-        if (state.getMeasuredSpeed() > 0 || r.wallSeconds() <= 0) {
-            return;
-        }
-        double speed = r.segment().durationMs() / 1000.0 / r.wallSeconds();
-        state.setMeasuredSpeed(speed);
-        CompressSpec spec = state.getSpec();
-        if (spec.options().segmentSeconds() > 0) {
-            return;
-        }
-        List<SegmentRecord> segs = state.getSegments();
-        int firstUntouched = segs.size();
-        for (int i = segs.size() - 1; i >= 0 && segs.get(i).getState() == SegmentState.PENDING; i--) {
-            firstUntouched = i;
-        }
-        if (firstUntouched >= segs.size()) {
-            return;
-        }
-        long from = segs.get(firstUntouched).getStartMs();
-        List<SegmentRecord> tail = plan(from, spec.totalDurationMs(), segmentMs(spec.options(), speed),
-                segs.get(firstUntouched).getIndex());
-        segs.subList(firstUntouched, segs.size()).clear();
-        segs.addAll(tail);
-        LOG.info(() -> String.format(Locale.ROOT, "Measured %.1fx, re-planned %d segments", speed, tail.size()));
     }
 
     /** Appends every finished segment that is next in line; returns the (possibly new) base info. */
@@ -279,7 +313,8 @@ public final class SegmentedEncoder implements JobExecutor {
                 if (next == null || next.getState() != SegmentState.ENCODED) {
                     return base;
                 }
-                ticks = state.getCommittedTicks();
+                // anchor at the planned position (no cumulative drift), never before the previous segment's end
+                ticks = Math.max(state.getCommittedTicks(), Math.round(next.getStartMs() * (TIMESCALE / 1000.0)));
                 seq = state.getNextSequence();
             }
             Path temp = CompressRecovery.segmentFile(spec, next);
@@ -298,42 +333,51 @@ public final class SegmentedEncoder implements JobExecutor {
         }
     }
 
-    private SegmentResult encode(CompressSpec spec, List<String> input, SegmentRecord s, CancellationToken token,
-                                 java.util.function.Consumer<Progress> progress) throws IOException {
+    private SegmentResult encode(CompressSpec spec, SegmentRecord s, CancellationToken token,
+                                 Consumer<Progress> progress) throws IOException {
         Path temp = CompressRecovery.segmentFile(spec, s);
         Files.deleteIfExists(temp);
-        double from = s.getStartMs() / 1000.0;
-        double to = s.getEndMs() / 1000.0;
+        CompressInput in = spec.sources().get(s.getInput());
+        double start = in.videoStartUs() / 1e6;
+        double from = s.getLocalStartMs() / 1000.0;
+        double length = s.durationMs() / 1000.0;
+        boolean lastOfSource = s.getLocalStartMs() + s.durationMs() >= in.durationMs();
         List<String> cmd = new ArrayList<>();
         cmd.add(tools.ffmpeg().toString());
-        cmd.addAll(List.of("-ss", seconds(from), "-copyts", "-t", seconds(to - from + 2)));
-        cmd.addAll(input);
-        cmd.addAll(List.of("-map", "0:v:0", "-vf", "trim=start=" + seconds(from) + ":end=" + seconds(to),
+        // -ss is relative to the file start; with -copyts the frames keep their own timestamps, so trim must add
+        // the stream's start_time. The last segment of a source has no end, so no trailing frame is ever lost.
+        cmd.addAll(List.of("-ss", seconds(from), "-copyts"));
+        if (!lastOfSource) {
+            cmd.addAll(List.of("-t", seconds(length + 2)));
+        }
+        cmd.addAll(List.of("-i", in.path(), "-map", "0:v:0", "-vf",
+                "trim=start=" + seconds(start + from) + (lastOfSource ? "" : ":end=" + seconds(start + from + length)),
                 "-fps_mode", "passthrough"));
         cmd.addAll(spec.options().profile().videoArgs(spec.options().quality()));
         cmd.addAll(List.of("-an", "-sn", "-dn", "-video_track_timescale", String.valueOf(TIMESCALE),
                 "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "-y", temp.toString()));
-        long start = System.nanoTime();
-        Duration length = Duration.ofMillis(s.durationMs());
-        FfmpegResult r = FfmpegProcess.run(cmd, length, p -> {
-            // with -copyts the reported time can be absolute (source time); make it segment-relative
-            long ms = p.processed().toMillis();
-            long rel = ms > s.durationMs() + 1000 ? ms - s.getStartMs() : ms;
-            progress.accept(new Progress(Duration.ofMillis(Math.max(0, Math.min(rel, s.durationMs()))), length,
-                    p.speed(), p.outputBytes()));
+        long t0 = System.nanoTime();
+        Duration total = Duration.ofMillis(s.durationMs());
+        double fps = in.frameRate() > 0 ? in.frameRate() : 30;
+        FfmpegResult r = FfmpegProcess.run(cmd, total, p -> {
+            // out_time is not usable with -copyts; frames are
+            long ms = Math.min(s.durationMs(), Math.round(p.frames() / fps * 1000));
+            progress.accept(new Progress(Duration.ofMillis(ms), total, p.speed(), p.outputBytes(), p.frames()));
         }, token);
         if (r.success() && !CompressRecovery.validSegment(temp, s)) {
             r = new FfmpegResult(1, false, List.of("Encoded segment " + s.getIndex() + " is incomplete or too short"));
         }
-        return new SegmentResult(s, r, (System.nanoTime() - start) / 1e9);
+        return new SegmentResult(s, r, (System.nanoTime() - t0) / 1e9);
     }
 
     private static void report(JobContext ctx, CompressState state, Map<SegmentRecord, Progress> live) {
         long done;
+        long committed;
         synchronized (ctx.lock()) {
             done = state.getSegments().stream()
                     .filter(s -> s.getState() == SegmentState.APPENDED || s.getState() == SegmentState.ENCODED)
                     .mapToLong(SegmentRecord::durationMs).sum();
+            committed = state.getCommittedBytes();
         }
         double speed = 0;
         for (Progress p : live.values()) {
@@ -344,12 +388,14 @@ public final class SegmentedEncoder implements JobExecutor {
             speed = state.getMeasuredSpeed();
         }
         ctx.progress(new Progress(Duration.ofMillis(done), Duration.ofMillis(state.getSpec().totalDurationMs()),
-                speed, state.getCommittedBytes()));
+                speed, committed));
     }
 
     // ------------------------------------------------------------------ audio and final mux
 
-    private Outcome prepareAudio(JobRecord job, JobContext ctx, List<String> input, Path audio) throws IOException {
+    private Outcome prepareAudio(JobRecord job, JobContext ctx, CompressSpec spec, Path work, Path audio)
+            throws IOException {
+        List<String> input = audioInputArgs(spec, work);
         for (boolean copy : new boolean[]{true, false}) {
             List<String> cmd = new ArrayList<>();
             cmd.add(tools.ffmpeg().toString());
@@ -361,11 +407,12 @@ public final class SegmentedEncoder implements JobExecutor {
             ctx.track(token);
             try {
                 FfmpegResult r = FfmpegProcess.run(cmd, Duration.ZERO, null, token);
+                if (r.cancelled()) {
+                    Files.deleteIfExists(audio);
+                    return ctx.cancelRequested() ? cancelAndClean(spec) : Outcome.PAUSED;
+                }
                 if (r.success()) {
                     return null;
-                }
-                if (r.cancelled()) {
-                    return ctx.cancelRequested() ? Outcome.CANCELLED : Outcome.PAUSED;
                 }
                 if (!copy) {
                     return fail(job, ctx, "error.ffmpeg", tail(r), String.valueOf(r.exitCode()));
@@ -382,10 +429,26 @@ public final class SegmentedEncoder implements JobExecutor {
             throws IOException {
         CompressSpec spec = state.getSpec();
         Path audio = work.resolve("audio.m4a");
-        boolean withAudio = spec.options().audio() == AudioMode.KEEP && spec.sourceHasAudio() && Files.exists(audio);
+        boolean withAudio = keepsAudio(spec);
+        if (withAudio && !Files.isRegularFile(audio)) {
+            synchronized (ctx.lock()) {
+                state.setAudioReady(false);
+            }
+            return fail(job, ctx, "error.audioMissing", null);
+        }
         Path muxed = work.resolve("final.mp4");
-        List<String> cmd = new ArrayList<>(List.of(tools.ffmpeg().toString(), "-i", part.toString()));
+        // keep the source's offset between video and audio start (both tracks start at 0 in our files)
+        CompressInput first = spec.sources().getFirst();
+        double avOffset = (first.videoStartUs() - first.audioStartUs()) / 1e6;
+        List<String> cmd = new ArrayList<>(List.of(tools.ffmpeg().toString()));
+        if (withAudio && avOffset > 0.001) {
+            cmd.addAll(List.of("-itsoffset", seconds(avOffset)));
+        }
+        cmd.addAll(List.of("-i", part.toString()));
         if (withAudio) {
+            if (avOffset < -0.001) {
+                cmd.addAll(List.of("-itsoffset", seconds(-avOffset)));
+            }
             cmd.addAll(List.of("-i", audio.toString()));
         }
         cmd.addAll(List.of("-map", "0:v:0"));
@@ -397,7 +460,9 @@ public final class SegmentedEncoder implements JobExecutor {
         ctx.track(token);
         FfmpegResult r;
         try {
-            r = FfmpegProcess.run(cmd, Duration.ofMillis(spec.totalDurationMs()), ctx::progress, token);
+            ctx.progress(new Progress(Duration.ofMillis(spec.totalDurationMs()),
+                    Duration.ofMillis(spec.totalDurationMs()), 0, state.getCommittedBytes(), -1));
+            r = FfmpegProcess.run(cmd, Duration.ZERO, null, token);
         } finally {
             ctx.untrack(token);
         }
@@ -421,17 +486,32 @@ public final class SegmentedEncoder implements JobExecutor {
 
     // ------------------------------------------------------------------ helpers
 
-    private Outcome checkSpace(JobRecord job, JobContext ctx, CompressState state, Path out) throws IOException {
+    /**
+     * Free space: at the start, room for the growing output (estimated from what is encoded so far); before the
+     * final mux, room for a full copy of the growing output plus audio.
+     */
+    private Outcome checkSpace(JobRecord job, JobContext ctx, CompressState state, Path out, boolean finalMux)
+            throws IOException {
         CompressSpec spec = state.getSpec();
-        long appendedMs = state.appendedMs();
-        // estimate the output from what is already encoded, otherwise assume half the input size
-        double ratio = appendedMs > 0 && state.getCommittedBytes() > 0
-                ? (double) state.getCommittedBytes() / appendedMs * spec.totalDurationMs() / Math.max(1, spec.totalBytes())
-                : 0.5;
-        long estimate = (long) (spec.totalBytes() * Math.min(1.0, ratio));
-        // the growing output and the final file exist side by side for a moment
-        long required = Math.max(0, 2 * estimate - state.getCommittedBytes());
-        DiskCheck.Result disk = DiskCheck.check(out.toAbsolutePath().getParent(), required, estimate);
+        long required;
+        long largest;
+        if (finalMux) {
+            Path part = CompressRecovery.partFile(spec);
+            Path audio = CompressRecovery.workDir(spec).resolve("audio.m4a");
+            long partSize = Files.exists(part) ? Files.size(part) : 0;
+            long audioSize = Files.exists(audio) ? Files.size(audio) : 0;
+            required = partSize + audioSize;
+            largest = required;
+        } else {
+            long appendedMs = state.appendedMs();
+            double ratio = appendedMs > 0 && state.getCommittedBytes() > 0
+                    ? (double) state.getCommittedBytes() / appendedMs * spec.totalDurationMs() / Math.max(1, spec.totalBytes())
+                    : INITIAL_SIZE_RATIO;
+            long estimate = (long) (spec.totalBytes() * Math.min(1.0, ratio));
+            required = Math.max(0, estimate - state.getCommittedBytes());
+            largest = estimate;
+        }
+        DiskCheck.Result disk = DiskCheck.check(out.toAbsolutePath().getParent(), required, largest);
         if (!disk.enoughSpace()) {
             return fail(job, ctx, "error.diskSpace", null, Formats.size(disk.requiredBytes()),
                     Formats.size(disk.usableBytes()));
@@ -442,10 +522,10 @@ public final class SegmentedEncoder implements JobExecutor {
         return null;
     }
 
-    /** FFmpeg input arguments: the file itself, or a concat list of the clips. */
-    static List<String> inputArgs(CompressSpec spec, Path work) throws IOException {
-        if (spec.inputs().size() == 1) {
-            return List.of("-i", spec.inputs().getFirst());
+    /** Audio input: the file itself, or a concat list of the sources (timestamps follow the source durations). */
+    static List<String> audioInputArgs(CompressSpec spec, Path work) throws IOException {
+        if (spec.sources().size() == 1) {
+            return List.of("-i", spec.sources().getFirst().path());
         }
         Path list = work.resolve("inputs.txt");
         StringBuilder sb = new StringBuilder("ffconcat version 1.0\n");
@@ -456,8 +536,8 @@ public final class SegmentedEncoder implements JobExecutor {
         return List.of("-f", "concat", "-safe", "0", "-i", list.toString());
     }
 
-    private static String seconds(double s) {
-        return String.format(Locale.ROOT, "%.3f", s);
+    static String seconds(double s) {
+        return String.format(Locale.ROOT, "%.6f", s);
     }
 
     private static SegmentResult get(Future<SegmentResult> f) throws IOException, InterruptedException {

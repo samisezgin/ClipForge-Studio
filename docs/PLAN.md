@@ -41,18 +41,22 @@ performance impact.
   VMAF 92, CQ 40 → 4.3 Mbps / 88.7 at 7.5x realtime; SVT-AV1 CRF 35 → 3.8 Mbps / 90.6 at 2x; HEVC NVENC CQ 32 →
   6.4 Mbps / 90.7 at 3.7x. Note: `av1_nvenc` CQ is on a 0-63 scale, so the initially planned CQ 28 produced files
   larger than the source. Two real 2-minute clips: 320 MB → 150 MB (-53 %) in 30 s, frame-exact.
-- Segments are encoded with `-ss S -copyts -i … -vf trim=start=S:end=E -fps_mode passthrough` (frame-exact, no
-  overlap) into fragmented MP4 with a 90 kHz timescale; each segment's `tfdt` is shifted on append.
+- Segments are encoded with `-ss S -copyts -i <source> -vf trim=start=T0+S:end=T0+E -fps_mode passthrough` where T0 is the
+  source's video `start_time` (frame-exact, no overlap; `out_time` is unusable with `-copyts`, so progress counts frames)
+  into fragmented MP4 with a 90 kHz timescale. On append each segment is anchored at its planned position, so timing
+  errors stay below one frame instead of accumulating; 32-bit `tfdt` boxes are rewritten as 64-bit.
+- Three real 2-minute clips (480 MB, 6 min): 233 MB in 38 s (9.5x realtime, 2 parallel segments), 10809/10809 frames.
 - Audio is extracted once (stream copy, AAC fallback) and muxed with the video at the end together with
   `+faststart`; while encoding, the growing `.part.mp4` is video only.
 - Quality slider + "encode 60 s sample" to estimate final size/time.
 - **Segmented encoding with a growing output:** the input timeline is cut into fixed time segments independent of
   source clip length (auto length ≈ 45–60 s of work per segment, or manual 30 s–10 min), keyframe aligned.
-  Each segment is encoded to a fragmented MP4 in `<project>.work/`, then appended in order to the main fragmented MP4
+  Segments never cross source files (each source is cut on its own timestamps, so joined clips and sources with a
+  non-zero start time stay frame-exact). Each segment is encoded to a fragmented MP4 in `<output>.work/`, then appended in order to the main fragmented MP4
   output (only `moof/mdat` boxes, `mfhd` renumbered). The output grows while encoding and is playable at any time.
   Audio is prepared once as a separate track and copied per segment. Up to 2 concurrent segments on NVENC.
 - Pause / resume / crash recovery — see [RECOVERY.md](RECOVERY.md).
-- Optional final remux to standard MP4 (`+faststart`).
+- The final mux always writes a standard MP4 with `+faststart` (seekable, plays everywhere).
 
 ## Phase 3 — Audio (v0.3.0)
 - Keep / remove (`-an`) / background music (video stream-copied, only audio encoded, AAC 192k stereo).

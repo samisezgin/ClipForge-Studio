@@ -43,15 +43,29 @@ public final class CompressSampler {
 
     public Result sample(CompressSpec spec, double seconds, CancellationToken token) throws IOException {
         double total = spec.totalDurationMs() / 1000.0;
-        double length = Math.min(seconds, total);
-        double from = Math.max(0, total / 2 - length / 2);
+        // sample from the middle of the timeline, inside one source (seeking across joined clips is unreliable)
+        double middle = total / 2;
+        CompressInput source = spec.sources().getLast();
+        double localMiddle = 0;
+        double offset = 0;
+        for (CompressInput in : spec.sources()) {
+            double d = in.durationMs() / 1000.0;
+            if (middle < offset + d) {
+                source = in;
+                localMiddle = middle - offset;
+                break;
+            }
+            offset += d;
+        }
+        double sourceSeconds = source.durationMs() / 1000.0;
+        double length = Math.min(seconds, sourceSeconds);
+        double from = Math.max(0, Math.min(sourceSeconds - length, localMiddle - length / 2));
         Path work = Files.createTempDirectory("clipforge-sample-");
         Path out = work.resolve("sample.mp4");
         try {
             List<String> cmd = new ArrayList<>();
             cmd.add(tools.ffmpeg().toString());
-            cmd.addAll(List.of("-ss", fmt(from), "-t", fmt(length)));
-            cmd.addAll(SegmentedEncoder.inputArgs(spec, work));
+            cmd.addAll(List.of("-ss", fmt(from), "-t", fmt(length), "-i", source.path()));
             cmd.addAll(List.of("-map", "0:v:0"));
             cmd.addAll(spec.options().profile().videoArgs(spec.options().quality()));
             cmd.addAll(List.of("-an", "-sn", "-dn", "-f", "mp4", "-y", out.toString()));
@@ -70,7 +84,6 @@ public final class CompressSampler {
             return new Result(length, bytes, speed, estimated, time, Math.round(bytes * 8 / length / 1000));
         } finally {
             Files.deleteIfExists(out);
-            Files.deleteIfExists(work.resolve("inputs.txt"));
             Files.deleteIfExists(work);
         }
     }

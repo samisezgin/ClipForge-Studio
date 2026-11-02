@@ -88,6 +88,14 @@ public final class AppSettings {
         prefs.put("lastFolder", dir);
     }
 
+    public String lastOutputDir() {
+        return prefs.get("lastOutputDir", "");
+    }
+
+    public void setLastOutputDir(String dir) {
+        prefs.put("lastOutputDir", dir == null ? "" : dir);
+    }
+
     public String lastProject() {
         return prefs.get("lastProject", "");
     }

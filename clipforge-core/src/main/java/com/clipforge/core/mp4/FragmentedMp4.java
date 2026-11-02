@@ -165,8 +165,7 @@ public final class FragmentedMp4 {
                 writeFully(out, ByteBuffer.wrap(seg.init()));
             }
             for (Fragment f : seg.fragments()) {
-                ByteBuffer moof = Mp4Reader.read(segment, f.moof());
-                patchFragment(moof, f.moof(), seq++, shift);
+                ByteBuffer moof = patchFragment(Mp4Reader.read(segment, f.moof()), f.moof(), seq++, shift);
                 writeFully(out, moof);
                 long copied = 0;
                 while (copied < f.mdat().size()) {
@@ -284,31 +283,69 @@ public final class FragmentedMp4 {
         return false;
     }
 
-    /** Renumbers mfhd and shifts tfdt in a moof held in {@code moof} (buffer offset 0 = box start). */
-    private static void patchFragment(ByteBuffer moof, Mp4Box abs, int sequence, long shift) throws IOException {
+    /**
+     * Renumbers mfhd and shifts tfdt in a moof held in {@code moof} (buffer offset 0 = box start). A 32-bit
+     * (version 0) tfdt is rewritten as 64-bit, so outputs longer than 13.25 h (2^32 ticks at 90 kHz) work; the moof
+     * and traf sizes and the trun data offset (relative to the moof with default-base-is-moof) grow by 4 bytes.
+     */
+    static ByteBuffer patchFragment(ByteBuffer moof, Mp4Box abs, int sequence, long shift) throws IOException {
         Mp4Box root = new Mp4Box("moof", 0, abs.size(), abs.headerSize());
+        Mp4Box traf = null;
+        Mp4Box tfdt = null;
         for (Mp4Box c : Mp4Reader.children(moof, root, 0)) {
             if (c.type().equals("mfhd")) {
                 moof.putInt((int) c.payloadOffset() + 4, sequence);
             } else if (c.type().equals("traf")) {
+                traf = c;
                 for (Mp4Box t : Mp4Reader.children(moof, c, 0)) {
                     if (t.type().equals("tfdt")) {
-                        int p = (int) t.payloadOffset();
-                        int version = moof.get(p) & 0xff;
-                        if (version == 1) {
-                            moof.putLong(p + 4, moof.getLong(p + 4) + shift);
-                        } else {
-                            long v = Integer.toUnsignedLong(moof.getInt(p + 4)) + shift;
-                            if (v < 0 || v > 0xffffffffL) {
-                                throw new IncompatibleException("32-bit tfdt overflow");
-                            }
-                            moof.putInt(p + 4, (int) v);
-                        }
+                        tfdt = t;
                     }
                 }
             }
         }
-        moof.rewind();
+        if (traf == null || tfdt == null) {
+            throw new IncompatibleException("Fragment without traf/tfdt");
+        }
+        int p = (int) tfdt.payloadOffset();
+        int version = moof.get(p) & 0xff;
+        if (version == 1) {
+            moof.putLong(p + 4, moof.getLong(p + 4) + shift);
+            return moof.rewind();
+        }
+        long value = Integer.toUnsignedLong(moof.getInt(p + 4)) + shift;
+        int size = (int) abs.size();
+        ByteBuffer out = ByteBuffer.allocate(size + 4);
+        byte[] src = new byte[size];
+        moof.get(0, src);
+        int tfdtAt = (int) tfdt.offset();
+        int tfdtEnd = (int) tfdt.end();
+        out.put(src, 0, tfdtAt);
+        out.putInt(20).put(new byte[]{'t', 'f', 'd', 't'}).put((byte) 1)
+                .put(src[p + 1]).put(src[p + 2]).put(src[p + 3]).putLong(value);
+        out.put(src, tfdtEnd, size - tfdtEnd);
+        // grow the enclosing boxes
+        growSize(out, 0, abs.headerSize());
+        growSize(out, (int) traf.offset(), traf.headerSize());
+        Mp4Box newTraf = new Mp4Box("traf", traf.offset(), traf.size() + 4, traf.headerSize());
+        for (Mp4Box t : Mp4Reader.children(out, newTraf, 0)) {
+            if (t.type().equals("trun")) {
+                int q = (int) t.payloadOffset();
+                int flags = out.getInt(q) & 0xffffff;
+                if ((flags & 0x1) != 0) {
+                    out.putInt(q + 8, out.getInt(q + 8) + 4); // data_offset is relative to the moof start
+                }
+            }
+        }
+        return out.rewind();
+    }
+
+    private static void growSize(ByteBuffer b, int at, int headerSize) {
+        if (headerSize == 16) {
+            b.putLong(at + 8, b.getLong(at + 8) + 4);
+        } else {
+            b.putInt(at, b.getInt(at) + 4);
+        }
     }
 
     private static void writeFully(FileChannel ch, ByteBuffer buf) throws IOException {

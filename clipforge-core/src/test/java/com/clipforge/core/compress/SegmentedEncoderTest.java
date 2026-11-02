@@ -191,6 +191,103 @@ class SegmentedEncoderTest {
         assertFinished(again);
     }
 
+    /** Source with a 1.4 s start offset and B-frames, plus a second clip: the reviewers' failure cases. */
+    @Test
+    void offsetSourcesAndMultipleClipsStayFrameExact() throws Exception {
+        Path dir = Files.createDirectories(tmp.resolve("offset"));
+        Path a = dir.resolve("a.mp4");
+        Path b = dir.resolve("b.mp4");
+        for (Path f : List.of(a, b)) {
+            FfmpegTestSupport.run(List.of(tools.ffmpeg().toString(), "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30000/1001:duration=11",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=11",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-bf", "3", "-g", "60", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-output_ts_offset", "1.4", f.toString()));
+        }
+        ProbeService probe = new ProbeService(tools);
+        MediaInfo ma = probe.probe(a).orElseThrow();
+        assertEquals(1.4, ma.videoStart().toMillis() / 1000.0, 0.01, "offset is detected");
+        MediaInfo mb = probe.probe(b).orElseThrow();
+        List<CompressInput> sources = List.of(CompressInput.of(a, ma), CompressInput.of(b, mb));
+        long ms = ma.duration().toMillis() + mb.duration().toMillis();
+        CompressOptions o = new CompressOptions(profile, profile.defaultQuality(), 4, 2, AudioMode.KEEP);
+        Path out = Files.createDirectories(tmp.resolve("o2")).resolve("joined.mp4");
+        JobRecord job = JobRecord.compress(new CompressSpec(sources, out.toString(), o, ms,
+                Files.size(a) + Files.size(b), true), List.of(), Clock.systemUTC().instant());
+        JobQueue q = queue(new Noop());
+        q.submit(List.of(job));
+        assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
+        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertTrue(job.getCompress().getSegments().stream()
+                .allMatch(s -> s.getLocalStartMs() + s.durationMs() <= sources.get(s.getInput()).durationMs()),
+                "segments never cross sources");
+        int expected = frames(a) + frames(b);
+        assertEquals(expected, frames(out), "every frame of both clips exactly once");
+        MediaInfo m = probe.probe(out).orElseThrow();
+        assertEquals(ms / 1000.0, m.duration().toMillis() / 1000.0, 0.5);
+    }
+
+    @Test
+    void cancellingAPausedJobRemovesItsFiles() throws Exception {
+        JobRecord job = newJob(1);
+        JobQueue[] holder = new JobQueue[1];
+        boolean[] stopped = {false};
+        holder[0] = queue(new Noop() {
+            @Override
+            public void progress(JobRecord j, Progress p) {
+                if (!stopped[0] && j.getCompress().getCommittedBytes() > 0) {
+                    stopped[0] = true;
+                    holder[0].stopNow();
+                }
+            }
+        });
+        holder[0].submit(List.of(job));
+        assertTrue(holder[0].awaitIdle(Duration.ofMinutes(3)));
+        assertEquals(JobState.PAUSED, job.getState());
+        CompressSpec spec = job.getCompress().getSpec();
+        assertTrue(Files.exists(CompressRecovery.partFile(spec)));
+        holder[0].cancel(job);
+        assertEquals(JobState.CANCELLED, job.getState());
+        assertFalse(Files.exists(CompressRecovery.partFile(spec)), "growing output removed");
+        assertFalse(Files.exists(CompressRecovery.workDir(spec)), "work folder removed");
+    }
+
+    @Test
+    void damagedOutputKeepsIntactSegments() throws Exception {
+        JobRecord job = newJob(1);
+        JobQueue[] holder = new JobQueue[1];
+        boolean[] stopped = {false};
+        holder[0] = queue(new Noop() {
+            @Override
+            public void progress(JobRecord j, Progress p) {
+                if (!stopped[0] && j.getCompress().getSegments().stream()
+                        .filter(s -> s.getState() == SegmentState.APPENDED).count() >= 3) {
+                    stopped[0] = true;
+                    holder[0].stopNow();
+                }
+            }
+        });
+        holder[0].submit(List.of(job));
+        assertTrue(holder[0].awaitIdle(Duration.ofMinutes(3)));
+        CompressState st = job.getCompress();
+        Path part = CompressRecovery.partFile(st.getSpec());
+        // cut the file in the middle of the third segment (e.g. a sync tool truncated it)
+        FragmentedMp4.Info info = FragmentedMp4.inspect(part);
+        long cut = info.fragments().getLast().mdat().offset() + 10;
+        FragmentedMp4.truncate(part, cut);
+        synchronized (project) {
+            CompressRecovery.reconcile(st);
+        }
+        long kept = st.getSegments().stream().filter(s -> s.getState() == SegmentState.APPENDED).count();
+        assertTrue(kept >= 1 && kept < 3, "intact prefix kept: " + kept);
+        assertEquals(st.getCommittedBytes(), Files.size(part));
+
+        JobQueue q2 = queue(new Noop());
+        q2.resume();
+        assertTrue(q2.awaitIdle(Duration.ofMinutes(3)));
+        assertFinished(job);
+    }
+
     @Test
     void sampleEstimatesSize() throws Exception {
         JobRecord job = newJob(1);

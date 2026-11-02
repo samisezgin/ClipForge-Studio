@@ -49,7 +49,7 @@ public final class Mp4Reader {
                 } else if (boxSize == 0) {
                     boxSize = size - pos; // box extends to end of file
                 }
-                if (boxSize < headerSize || !printable(type) || pos + boxSize > size) {
+                if (boxSize < headerSize || !printable(type) || boxSize > size - pos) { // overflow-safe
                     break;
                 }
                 boxes.add(new Mp4Box(type, pos, boxSize, headerSize));
@@ -87,7 +87,7 @@ public final class Mp4Reader {
                 size = buf.getLong((int) pos + 8);
                 header = 16;
             }
-            if (size < header || pos + size > parent.end()) {
+            if (size < header || size > parent.end() - pos) {
                 break;
             }
             list.add(new Mp4Box(type, pos, size, header));

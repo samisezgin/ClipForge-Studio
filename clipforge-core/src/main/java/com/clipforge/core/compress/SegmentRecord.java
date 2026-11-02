@@ -1,9 +1,17 @@
 package com.clipforge.core.compress;
 
-/** One time slice of the input, persisted in the project file. Mutable; guarded by the project monitor. */
+/**
+ * One time slice of one source, persisted in the project file. Segments never cross source boundaries, so each is
+ * cut from a single file with accurate seeking. Mutable; guarded by the project monitor.
+ */
 public final class SegmentRecord {
 
     private int index;
+    /** Index of the source in {@link CompressSpec#sources()}. */
+    private int input;
+    /** Start within the source, relative to its video start, in milliseconds. */
+    private long localStartMs;
+    /** Start and end on the output timeline, in milliseconds. */
     private long startMs;
     private long endMs;
     private SegmentState state = SegmentState.PENDING;
@@ -12,8 +20,10 @@ public final class SegmentRecord {
         // for Jackson
     }
 
-    public SegmentRecord(int index, long startMs, long endMs) {
+    public SegmentRecord(int index, int input, long localStartMs, long startMs, long endMs) {
         this.index = index;
+        this.input = input;
+        this.localStartMs = localStartMs;
         this.startMs = startMs;
         this.endMs = endMs;
     }
@@ -24,6 +34,22 @@ public final class SegmentRecord {
 
     public void setIndex(int index) {
         this.index = index;
+    }
+
+    public int getInput() {
+        return input;
+    }
+
+    public void setInput(int input) {
+        this.input = input;
+    }
+
+    public long getLocalStartMs() {
+        return localStartMs;
+    }
+
+    public void setLocalStartMs(long localStartMs) {
+        this.localStartMs = localStartMs;
     }
 
     public long getStartMs() {

@@ -277,17 +277,15 @@ public final class MainView {
         if (!outputBox.commit()) {
             return;
         }
-        AppController.CompressPlan plan = controller.planCompress();
-        if (!plan.ok()) {
-            error(Messages.get("compress.error.title"), Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
-            return;
-        }
-        try {
-            controller.startCompress(plan.specs());
-            controller.setStatus("status.compressQueued", plan.specs().size());
-        } catch (IOException e) {
-            error(Messages.get("compress.error.title"), Messages.get("error.io", e.getMessage()));
-        }
+        controller.setStatus("status.planning");
+        controller.planCompressAsync(plan -> {
+            if (!plan.ok()) {
+                controller.setStatus("status.ready");
+                error(Messages.get("compress.error.title"), Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
+                return;
+            }
+            controller.startCompressAsync(plan.specs(), msg -> error(Messages.get("compress.error.title"), msg));
+        });
     }
 
     private void sample() {
@@ -295,14 +293,15 @@ public final class MainView {
             compressPanel.showSampleError("");
             return;
         }
-        AppController.CompressPlan plan = controller.planCompress();
-        if (!plan.ok()) {
-            compressPanel.showSampleError(Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
-            return;
-        }
-        var spec = plan.specs().getFirst();
-        controller.sample(spec, r -> compressPanel.showSample(r, spec.totalBytes()),
-                msg -> compressPanel.showSampleError(Messages.get("compress.sample.failed")));
+        controller.planCompressAsync(plan -> {
+            if (!plan.ok()) {
+                compressPanel.showSampleError(Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
+                return;
+            }
+            var spec = plan.specs().getFirst();
+            controller.sample(spec, r -> compressPanel.showSample(r, spec.totalBytes()),
+                    msg -> compressPanel.showSampleError(Messages.get("compress.sample.failed")));
+        });
     }
 
     private void merge() {
@@ -465,7 +464,8 @@ public final class MainView {
         for (RecoveryService.Issue i : actionable) {
             sb.append("• ").append(Path.of(i.job().output()).getFileName());
             if (i.kind() == RecoveryService.Kind.SOURCE_CHANGED) {
-                sb.append("  — ").append(Messages.get("recovery.sourceChanged", i.changedSources().size()));
+                sb.append("  — ").append(Messages.get(i.job().getCompress() != null
+                        ? "recovery.sourceChangedRestart" : "recovery.sourceChanged", i.changedSources().size()));
             }
             sb.append('\n');
         }

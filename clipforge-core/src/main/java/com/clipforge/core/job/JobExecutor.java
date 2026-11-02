@@ -17,4 +17,8 @@ public interface JobExecutor {
     }
 
     Outcome execute(JobRecord job, JobContext ctx) throws IOException;
+
+    /** Removes partial files of a job that was cancelled while not running. */
+    default void discard(JobRecord job) {
+    }
 }

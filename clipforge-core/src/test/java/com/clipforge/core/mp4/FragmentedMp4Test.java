@@ -74,6 +74,19 @@ class FragmentedMp4Test {
         assertEquals(300, joined.samples());
         assertEquals(r.endTicks(), FragmentedMp4.endTicks(joined));
 
+        // outputs longer than 13.25 h: decode times beyond 2^32 ticks must work (tfdt rewritten as 64-bit)
+        Path longOut = tmp.resolve("long.mp4");
+        long far = 14L * 3600 * 90000;
+        FragmentedMp4.AppendResult lr = FragmentedMp4.append(longOut, null, s1, 0, 1);
+        lr = FragmentedMp4.append(longOut, base, s2, far, lr.nextSequence());
+        FragmentedMp4.Info longInfo = FragmentedMp4.inspect(longOut);
+        assertEquals(240, longInfo.samples());
+        assertEquals(far, longInfo.fragments().get(longInfo.fragments().size() - base.fragments().size()).decodeTime());
+        assertEquals(far + 4 * 90000, FragmentedMp4.endTicks(longInfo), 3000);
+        List<Double> longTimes = packetTimes(t, longOut);
+        assertEquals(240, longTimes.size(), "player-readable after the size change");
+        assertEquals(14 * 3600.0, longTimes.get(120), 0.1);
+
         // simulate a crash in the middle of the last append and recover by truncation
         Files.write(out, new byte[]{0, 0, 1, 0, 'm', 'o', 'o', 'f', 1, 2, 3}, java.nio.file.StandardOpenOption.APPEND);
         FragmentedMp4.Info damaged = FragmentedMp4.inspect(out);

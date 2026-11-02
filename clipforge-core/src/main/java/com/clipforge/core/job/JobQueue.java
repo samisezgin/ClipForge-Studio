@@ -164,6 +164,10 @@ public final class JobQueue {
             }
         }
         persist.run();
+        JobExecutor executor = executors.get(job.getType());
+        if (executor != null) {
+            executor.discard(job); // e.g. a paused compression job's growing output and segments
+        }
     }
 
     /** Waits until the worker stopped. */
@@ -256,9 +260,11 @@ public final class JobQueue {
             tokens.clear();
         }
         synchronized (project) {
+            // Pause followed by Resume while the job was still finishing its segments: run it again right away
+            boolean resumedMeanwhile = outcome == JobExecutor.Outcome.PAUSED && !pauseRequested && !stopNowRequested;
             switch (outcome) {
                 case DONE -> update(job, JobState.DONE);
-                case PAUSED -> update(job, JobState.PAUSED);
+                case PAUSED -> update(job, resumedMeanwhile ? JobState.PENDING : JobState.PAUSED);
                 case CANCELLED -> update(job, JobState.CANCELLED);
                 case FAILED -> {
                     job.setState(JobState.FAILED);

@@ -48,6 +48,11 @@ public final class OutputFolderBox extends VBox {
         };
         load.run();
         listeners.on(controller.projectVersionProperty(), (o, a, b) -> load.run());
+        listeners.on(controller.outputDirProperty(), (o, a, b) -> {
+            if (!field.isFocused()) {
+                field.setText(b == null ? "" : b);
+            }
+        });
     }
 
     /** Commits the typed path; returns {@code false} if it is invalid. */

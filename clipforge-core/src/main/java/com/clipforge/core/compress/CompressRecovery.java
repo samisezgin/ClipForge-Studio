@@ -6,6 +6,7 @@ import com.clipforge.core.util.OutputNaming;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.logging.Logger;
 
 /**
@@ -82,18 +83,71 @@ public final class CompressRecovery {
             // scenario 2: crashed while appending - cut back to the committed point
             FragmentedMp4.truncate(part, committed);
         }
+        FragmentedMp4.Info info;
         try {
-            FragmentedMp4.Info info = FragmentedMp4.inspect(part);
-            if (size < committed || FragmentedMp4.lastCompleteFragmentEnd(info) != committed
-                    || FragmentedMp4.endTicks(info) != state.getCommittedTicks()) {
-                throw new IOException("Output does not match the committed point");
-            }
+            info = FragmentedMp4.inspect(part);
         } catch (IOException e) {
-            // scenario 3: damaged or shortened output - start the output over (segments are re-encoded)
-            LOG.warning("Growing output inconsistent (" + e.getMessage() + "), starting it over: " + part);
+            LOG.warning("Growing output unreadable (" + e.getMessage() + "), starting it over: " + part);
             Files.deleteIfExists(part);
             resetAppended(state);
+            return;
         }
+        if (size >= committed && FragmentedMp4.lastCompleteFragmentEnd(info) == committed
+                && FragmentedMp4.endTicks(info) == state.getCommittedTicks()) {
+            return; // consistent
+        }
+        keepIntactPrefix(state, part, info);
+    }
+
+    /**
+     * Scenario 3: the output was shortened or damaged. Keep the appended segments that are still completely in the
+     * file (their end matches a fragment end, found via the fragments' tfdt), cut the file after the last of them,
+     * and re-encode the rest.
+     */
+    private static void keepIntactPrefix(CompressState state, Path part, FragmentedMp4.Info info) throws IOException {
+        long tolerance = SegmentedEncoder.TIMESCALE / 5; // 200 ms: a segment ends within a frame of its plan
+        List<FragmentedMp4.Fragment> fragments = info.fragments();
+        long keepBytes = 0;
+        long keepTicks = 0;
+        int keepSeq = 1;
+        int j = 0;
+        boolean intact = true;
+        for (SegmentRecord s : state.getSegments()) {
+            if (s.getState() != SegmentState.APPENDED) {
+                continue;
+            }
+            long segEnd = s.getEndMs() * (SegmentedEncoder.TIMESCALE / 1000);
+            boolean found = false;
+            while (intact && j < fragments.size()) {
+                FragmentedMp4.Fragment f = fragments.get(j++);
+                long fEnd = f.decodeTime() + f.durationTicks();
+                if (Math.abs(fEnd - segEnd) <= tolerance) {
+                    keepBytes = f.mdat().end();
+                    keepTicks = fEnd;
+                    keepSeq = j + 1;
+                    found = true;
+                    break;
+                }
+                if (fEnd > segEnd + tolerance) {
+                    break;
+                }
+            }
+            if (!found) {
+                intact = false;
+                s.setState(SegmentState.PENDING);
+            }
+        }
+        if (keepBytes == 0) {
+            LOG.warning("No intact segment left in " + part + ", starting the output over");
+            Files.deleteIfExists(part);
+            resetAppended(state);
+            return;
+        }
+        FragmentedMp4.truncate(part, keepBytes);
+        state.setCommittedBytes(keepBytes);
+        state.setCommittedTicks(keepTicks);
+        state.setNextSequence(keepSeq);
+        LOG.warning("Growing output was damaged; kept " + state.appendedMs() / 1000 + " s, re-encoding the rest");
     }
 
     private static void resetAppended(CompressState state) {
@@ -119,6 +173,30 @@ public final class CompressRecovery {
                     && Math.abs(ms - s.durationMs()) <= DURATION_TOLERANCE_MS;
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    /**
+     * Starts a job over (e.g. after its source changed): forgets all segments and deletes the job's partial files.
+     * Caller holds the project monitor.
+     */
+    public static void restart(CompressState state) throws IOException {
+        cleanUp(state.getSpec(), false);
+        state.getSegments().clear();
+        resetAppended(state);
+        state.setAudioReady(false);
+        state.setMeasuredSpeed(0);
+    }
+
+    /** Deletes the job's partial files of any job state: used when a compression job is cancelled or removed. */
+    public static void discard(com.clipforge.core.project.JobRecord job) {
+        if (job.getCompress() == null || job.getCompress().getSpec() == null) {
+            return;
+        }
+        try {
+            cleanUp(job.getCompress().getSpec(), false);
+        } catch (IOException e) {
+            LOG.warning("Cannot remove partial files of " + job.output() + ": " + e.getMessage());
         }
     }
 

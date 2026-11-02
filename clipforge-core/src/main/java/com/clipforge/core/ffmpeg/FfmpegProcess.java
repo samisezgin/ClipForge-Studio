@@ -55,8 +55,9 @@ public final class FfmpegProcess {
             synchronized (tail) {
                 lines = List.copyOf(tail);
             }
-            // a cancel that arrives after a successful exit does not invalidate the finished output
-            return new FfmpegResult(exit, token != null && token.isCancelled() && exit != 0, lines);
+            // FFmpeg exits with 0 after "q" although the output is incomplete, so the exit code cannot tell;
+            // a cancel that arrives only after the process ended does not invalidate the finished output
+            return new FfmpegResult(exit, token != null && token.interruptedProcess(), lines);
         } catch (InterruptedException e) {
             p.destroyForcibly();
             Thread.currentThread().interrupt();
@@ -77,6 +78,7 @@ public final class FfmpegProcess {
             long outTimeUs = 0;
             double speed = 0;
             long size = -1;
+            long frames = 0;
             String line;
             while ((line = r.readLine()) != null) {
                 int eq = line.indexOf('=');
@@ -89,12 +91,13 @@ public final class FfmpegProcess {
                     case "out_time_us", "out_time_ms" -> outTimeUs = parseLong(value, outTimeUs);
                     case "speed" -> speed = parseSpeed(value, speed);
                     case "total_size" -> size = parseLong(value, size);
+                    case "frame" -> frames = parseLong(value, frames);
                     case "progress" -> {
                         if (listener != null) {
                             // out_time_ms is (historically) also in microseconds
                             try {
                                 listener.accept(new Progress(Duration.ofNanos(Math.max(0, outTimeUs) * 1000), total,
-                                        speed, size));
+                                        speed, size, frames));
                             } catch (RuntimeException e) {
                                 LOG.warning("Progress listener failed: " + e);
                             }

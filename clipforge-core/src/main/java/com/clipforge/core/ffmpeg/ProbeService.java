@@ -50,6 +50,8 @@ public final class ProbeService {
         int height = 0;
         double fps = 0;
         int data = 0;
+        Duration videoStart = Duration.ZERO;
+        Duration audioStart = Duration.ZERO;
         for (JsonNode s : root.path("streams")) {
             String type = s.path("codec_type").asText();
             switch (type) {
@@ -60,11 +62,13 @@ public final class ProbeService {
                         width = s.path("width").asInt(0);
                         height = s.path("height").asInt(0);
                         fps = parseRate(s.path("avg_frame_rate").asText("0/0"));
+                        videoStart = seconds(s.path("start_time").asText("0"));
                     }
                 }
                 case "audio" -> {
                     if (audioCodec == null) {
                         audioCodec = s.path("codec_name").asText(null);
+                        audioStart = seconds(s.path("start_time").asText("0"));
                     }
                 }
                 case "data", "unknown" -> data++;
@@ -75,7 +79,16 @@ public final class ProbeService {
         }
         Instant created = parseInstant(format.path("tags").path("creation_time").asText(null));
         return Optional.of(new MediaInfo(Duration.ofMillis(Math.round(seconds * 1000)),
-                videoCodec, width, height, fps, audioCodec, data, created));
+                videoCodec, width, height, fps, audioCodec, data, created, videoStart, audioStart));
+    }
+
+    private static Duration seconds(String s) {
+        try {
+            double v = Double.parseDouble(s);
+            return Double.isFinite(v) && v > 0 ? Duration.ofNanos(Math.round(v * 1e9)) : Duration.ZERO;
+        } catch (NumberFormatException e) {
+            return Duration.ZERO; // "N/A"
+        }
     }
 
     private static double parseRate(String rate) {

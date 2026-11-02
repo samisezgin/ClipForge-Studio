@@ -10,8 +10,9 @@ each development phase is a minor release.
 - Compression tab: compress the selected clips (joined in the same pass, grouped like the merge mode) or any video file.
 - Encoder profiles AV1 NVENC (default), HEVC NVENC, SVT-AV1 and x265 with constant-quality slider; profiles are
   test-encoded at startup and only working ones are shown. Defaults tuned with VMAF on real dash cam footage.
-- Segmented encoding with automatic segment length (about one minute of work per segment, from the measured speed)
-  and parallel segments (2 on NVIDIA GPUs).
+- Segmented encoding, frame-exact for joined clips and sources with a non-zero start time. Automatic segment length:
+  a per-encoder default first, then about one minute of work per segment from the measured speed. Parallel segments
+  (2 on NVIDIA GPUs).
 - Growing output: finished segments are appended to `<name>.part.mp4`, which can be opened with *Watch* while encoding.
 - Pause (lossless), Stop now and crash recovery at segment level, including truncated appends and half-written segments.
 - *Encode 60 s sample*: real bitrate, size and time estimate for the chosen settings.

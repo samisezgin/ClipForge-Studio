@@ -57,6 +57,9 @@ public final class CompressPanel extends VBox {
     private final Button sampleButton = new Button(Messages.get("compress.sample"));
     private final Button startButton = new Button(Messages.get("compress.start"));
     private boolean loading;
+    private boolean sampling;
+    private final Label summary = new Label();
+    private final Label encoderNote = new Label();
 
     /**
      * @param onStart called with {@code true} to start compressing, {@code false} to encode a sample
@@ -86,8 +89,8 @@ public final class CompressPanel extends VBox {
         file.setOnAction(e -> saveSource());
 
         encoder.setMaxWidth(Double.MAX_VALUE);
-        encoder.setCellFactory(l -> new EncoderCell());
-        encoder.setButtonCell(new EncoderCell());
+        encoder.setCellFactory(l -> new EncoderCell(null));
+        encoder.setButtonCell(new EncoderCell(encoder)); // shows the prompt (detecting / none) when empty
         encoder.valueProperty().addListener((o, a, p) -> {
             if (p != null && !loading) {
                 loading = true;
@@ -103,8 +106,12 @@ public final class CompressPanel extends VBox {
         quality.setBlockIncrement(1);
         quality.setSnapToTicks(false);
         quality.valueProperty().addListener((o, a, b) -> {
-            quality.setValue(Math.round(b.doubleValue()));
-            qualityValue.setText(Messages.get("compress.quality.value", Math.round(quality.getValue())));
+            double rounded = Math.rint(b.doubleValue());
+            if (rounded != b.doubleValue()) {
+                quality.setValue(rounded); // re-enters this listener once with the whole number
+                return;
+            }
+            qualityValue.setText(Messages.get("compress.quality.value", Math.round(rounded)));
             saveOptions();
         });
         quality.setTooltip(new Tooltip(Messages.get("compress.quality.tip")));
@@ -148,6 +155,7 @@ public final class CompressPanel extends VBox {
         sampleButton.setTooltip(new Tooltip(Messages.get("compress.sample.tip")));
         sampleButton.setOnAction(e -> {
             sampleResult.setText(Messages.get("compress.sample.running"));
+            sampling = true;
             sampleButton.setDisable(true);
             onStart.accept(false);
         });
@@ -159,14 +167,20 @@ public final class CompressPanel extends VBox {
         note.setWrapText(true);
         note.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
 
-        getChildren().addAll(fromSelection, fromFile, fileRow, new Separator(),
-                new Label(Messages.get("compress.encoder")), encoder,
+        summary.setWrapText(true);
+        summary.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
+        encoderNote.setWrapText(true);
+        encoderNote.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.WARNING);
+        getChildren().addAll(fromSelection, fromFile, fileRow, summary, new Separator(),
+                new Label(Messages.get("compress.encoder")), encoder, encoderNote,
                 new Label(Messages.get("compress.quality")), qualityRow, grid,
                 new Label(Messages.get("compress.audio")), audioKeep, audioRemove, new Separator(),
                 sampleButton, sampleResult, startButton, note);
 
         listeners.on(controller.encodersProperty(), (o, a, b) -> load());
         listeners.on(controller.projectVersionProperty(), (o, a, b) -> load());
+        listeners.on(controller.selectionVersionProperty(), (o, a, b) -> updateSummary());
+        listeners.on(controller.sessions(), c -> updateSummary());
         load();
     }
 
@@ -180,7 +194,12 @@ public final class CompressPanel extends VBox {
             CompressOptions o = controller.compressOptions();
             boolean usable = o != null;
             startButton.setDisable(!usable);
-            sampleButton.setDisable(!usable);
+            sampleButton.setDisable(!usable || sampling);
+            boolean replaced = controller.savedEncoderUnavailable();
+            encoderNote.setText(replaced ? Messages.get("compress.encoder.replaced") : "");
+            encoderNote.setVisible(replaced);
+            encoderNote.setManaged(replaced);
+            updateSummary();
             fromFile.setSelected(controller.compressFromFile());
             fromSelection.setSelected(!controller.compressFromFile());
             file.setText(controller.compressFile() == null ? "" : controller.compressFile());
@@ -224,6 +243,7 @@ public final class CompressPanel extends VBox {
         }
         controller.setCompressSource(fromFile.isSelected(), p);
         sampleResult.setText("");
+        updateSummary();
     }
 
     private void chooseFile() {
@@ -244,8 +264,30 @@ public final class CompressPanel extends VBox {
         }
     }
 
+    /** What will be compressed: the chosen file, or the selection grouped by the merge mode. */
+    private void updateSummary() {
+        if (fromFile.isSelected()) {
+            String f = file.getText().trim();
+            String name;
+            try {
+                name = f.isEmpty() ? null : String.valueOf(Path.of(f).getFileName());
+            } catch (InvalidPathException e) {
+                name = f;
+            }
+            summary.setText(name == null ? Messages.get("error.noCompressFile")
+                    : Messages.get("compress.summary.file", name));
+            return;
+        }
+        var sel = controller.selectedClips();
+        long bytes = sel.stream().mapToLong(c -> c.size()).sum();
+        String mode = Messages.get(controller.mergeMode() == com.clipforge.core.merge.MergeMode.ALL_IN_ONE
+                ? "merge.mode.allInOne" : "merge.mode.perSession");
+        summary.setText(Messages.get("compress.summary.selection", sel.size(), Formats.size(bytes), mode));
+    }
+
     /** Shows the measured sample and the extrapolated result. */
     public void showSample(CompressSampler.Result r, long inputBytes) {
+        sampling = false;
         sampleButton.setDisable(false);
         sampleResult.setText(Messages.get("compress.sample.result", r.bitrateKbps() / 1000.0,
                 Formats.size(r.estimatedBytes()), Math.round((1 - r.ratio(inputBytes)) * 100), r.speed(),
@@ -253,15 +295,27 @@ public final class CompressPanel extends VBox {
     }
 
     public void showSampleError(String text) {
+        sampling = false;
         sampleButton.setDisable(false);
         sampleResult.setText(text);
     }
 
     private static final class EncoderCell extends ListCell<EncoderProfile> {
+        private final ComboBox<EncoderProfile> owner;
+
+        EncoderCell(ComboBox<EncoderProfile> owner) {
+            this.owner = owner;
+        }
+
         @Override
         protected void updateItem(EncoderProfile p, boolean empty) {
             super.updateItem(p, empty);
-            setText(empty || p == null ? null : Messages.get("encoder." + p.name().toLowerCase()));
+            if (empty || p == null) {
+                // a custom button cell hides the ComboBox prompt, so show it here
+                setText(owner == null ? null : owner.getPromptText());
+            } else {
+                setText(Messages.get("encoder." + p.name().toLowerCase()));
+            }
         }
     }
 }

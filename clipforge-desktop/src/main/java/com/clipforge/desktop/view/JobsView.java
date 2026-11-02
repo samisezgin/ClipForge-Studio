@@ -147,7 +147,10 @@ public final class JobsView extends VBox {
                 }
                 case RUNNING -> {
                     bar.setProgress(p == null || p.fraction() < 0 ? ProgressBar.INDETERMINATE_PROGRESS : p.fraction());
-                    if (compress) {
+                    if (compress && p != null && p.frames() < 0) {
+                        bar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
+                        detail.setText(Messages.get("jobs.detail.finishing"));
+                    } else if (compress) {
                         CompressState st = job.getCompress();
                         detail.setText(p == null ? Messages.get("jobs.detail.starting")
                                 : Messages.get("jobs.detail.compressing", Formats.duration(p.processed()),
@@ -186,12 +189,14 @@ public final class JobsView extends VBox {
             cancel.setOnAction(e -> controller.cancelJob(job));
             open.setVisible(s == JobState.DONE);
             open.setManaged(s == JobState.DONE);
-            boolean canWatch = compress && s != JobState.DONE && Files.exists(growing);
+            boolean canWatch = compress && (s == JobState.RUNNING || s == JobState.PAUSED) && Files.exists(growing);
             Path toWatch = s == JobState.DONE ? out : growing;
             watch.setVisible(canWatch || s == JobState.DONE);
             watch.setManaged(canWatch || s == JobState.DONE);
             watch.setOnAction(e -> {
-                if (host != null) {
+                if (!Files.exists(toWatch)) {
+                    controller.setStatus("status.fileMissing", toWatch.getFileName());
+                } else if (host != null) {
                     host.showDocument(toWatch.toAbsolutePath().toUri().toString());
                 }
             });
