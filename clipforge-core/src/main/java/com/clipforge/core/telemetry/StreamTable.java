@@ -28,8 +28,9 @@ public record StreamTable(List<Stream> streams, Map<String, String> formatTags) 
     private static final ObjectMapper JSON = new ObjectMapper();
 
     public static StreamTable read(Path file, FfmpegTools tools) throws IOException {
+        // no -count_packets: it would demux a multi-GB file just to count
         JsonNode root = JSON.readTree(run(tools, List.of("-v", "error", "-print_format", "json", "-show_format",
-                "-show_streams", "-count_packets", file.toString())));
+                "-show_streams", file.toString())));
         List<Stream> list = new ArrayList<>();
         for (JsonNode s : root.path("streams")) {
             list.add(new Stream(s.path("index").asInt(), s.path("codec_type").asText(),
@@ -76,13 +77,23 @@ public record StreamTable(List<Stream> streams, Map<String, String> formatTags) 
         cmd.addAll(args);
         Process p = new ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start();
         p.getOutputStream().close();
-        byte[] out = p.getInputStream().readAllBytes();
+        // read concurrently so the timeout also applies to an ffprobe that hangs without closing stdout
+        java.util.concurrent.CompletableFuture<byte[]> reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return p.getInputStream().readAllBytes();
+            } catch (IOException e) {
+                return new byte[0];
+            }
+        });
+        byte[] out;
         try {
-            if (!p.waitFor(120, TimeUnit.SECONDS)) {
+            if (!p.waitFor(300, TimeUnit.SECONDS)) {
                 p.destroyForcibly();
                 throw new IOException("ffprobe timed out");
             }
+            out = reader.join();
         } catch (InterruptedException e) {
+            p.destroyForcibly();
             Thread.currentThread().interrupt();
             throw new IOException(e);
         }

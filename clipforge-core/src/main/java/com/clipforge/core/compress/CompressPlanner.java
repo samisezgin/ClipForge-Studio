@@ -23,15 +23,19 @@ public final class CompressPlanner {
         int dot = name.lastIndexOf('.');
         String stem = dot > 0 ? name.substring(0, dot) : name;
         Path out = OutputNaming.unique(outputDir, stem + "_" + options.profile().shortName() + ".mp4", reserved);
-        // recording start: container creation time, otherwise file time minus duration (cameras close files at the end)
-        long start = media.creationTime() != null ? media.creationTime().toEpochMilli() : modifiedMinusDuration(file, media);
+        // recording start with the same rules as scanned clips: file name, creation_time, file time minus duration
+        long start = recordingStart(file, media);
         return new CompressSpec(List.of(CompressInput.of(file, media, start)), out.toString(), options,
                 media.duration().toMillis(), sizeBytes, media.hasAudio());
     }
 
-    private static long modifiedMinusDuration(Path file, MediaInfo media) {
+    private static long recordingStart(Path file, MediaInfo media) {
         try {
-            return java.nio.file.Files.getLastModifiedTime(file).toMillis() - media.duration().toMillis();
+            java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+            var resolved = new com.clipforge.core.scan.TimestampResolver(zone).resolve(
+                    com.clipforge.core.scan.TimestampResolver.parseName(file.getFileName().toString()), media,
+                    java.nio.file.Files.getLastModifiedTime(file).toInstant());
+            return resolved.start().atZone(zone).toInstant().toEpochMilli();
         } catch (java.io.IOException e) {
             return 0;
         }

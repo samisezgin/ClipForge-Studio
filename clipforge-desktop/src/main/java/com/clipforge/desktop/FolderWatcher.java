@@ -26,7 +26,7 @@ public final class FolderWatcher implements AutoCloseable {
     static final long QUIET_MILLIS = 35_000;
 
     private final Runnable onChange;
-    private WatchService service;
+    private volatile WatchService service;
     private Thread thread;
 
     private final long quietMillis;
@@ -48,12 +48,18 @@ public final class FolderWatcher implements AutoCloseable {
         }
         try {
             WatchService ws = FileSystems.getDefault().newWatchService();
+            int registered = 0;
             for (Path f : folders) {
                 try {
                     f.register(ws, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_MODIFY);
+                    registered++;
                 } catch (IOException e) {
                     LOG.warning("Cannot watch " + f + ": " + e.getMessage());
                 }
+            }
+            if (registered == 0) {
+                ws.close();
+                return;
             }
             service = ws;
             thread = Thread.ofPlatform().daemon(true).name("clipforge-watch").start(() -> loop(ws));
@@ -72,6 +78,9 @@ public final class FolderWatcher implements AutoCloseable {
                 boolean overdue = pending && System.currentTimeMillis() - pendingSince > 4 * quietMillis;
                 if (key == null || overdue) {
                     pending = false;
+                    if (service != ws) {
+                        return; // replaced by a newer watch: never report for an old folder list
+                    }
                     onChange.run();
                     if (key == null) {
                         continue;
@@ -83,7 +92,10 @@ public final class FolderWatcher implements AutoCloseable {
                         pendingSince = System.currentTimeMillis();
                     }
                 }
-                key.reset();
+                if (!key.reset()) {
+                    // the folder vanished (SD card or network drive removed); a rescan or folder change re-registers
+                    LOG.warning("Stopped watching " + key.watchable());
+                }
             }
         } catch (InterruptedException | ClosedWatchServiceException e) {
             // stopped

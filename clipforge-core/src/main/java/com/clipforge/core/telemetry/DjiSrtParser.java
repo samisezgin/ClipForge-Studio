@@ -29,8 +29,9 @@ public final class DjiSrtParser implements TelemetryParser {
     private static final Pattern TIMING = Pattern.compile(
             "(\\d+):(\\d+):(\\d+)[,.](\\d+)\\s*-->");
     private static final Pattern LAT = Pattern.compile("latitude\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
-    private static final Pattern LON = Pattern.compile("longitude\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
-    private static final Pattern ABS_ALT = Pattern.compile("abs_alt\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    // several DJI models write "longtitude"
+    private static final Pattern LON = Pattern.compile("longt?itude\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    private static final Pattern ABS_ALT = Pattern.compile("(?:abs_alt|\\baltitude)\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
     private static final Pattern GPS = Pattern.compile("GPS\\s*\\(\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)"
             + "(?:\\s*,\\s*(-?\\d+(?:\\.\\d+)?))?");
     private static final Pattern DATE = Pattern.compile("(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})(?:[.,](\\d{1,3}))?");

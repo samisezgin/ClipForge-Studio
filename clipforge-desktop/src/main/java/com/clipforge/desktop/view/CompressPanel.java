@@ -200,6 +200,8 @@ public final class CompressPanel extends VBox {
             fromFile.setSelected(controller.compressFromFile());
             fromSelection.setSelected(!controller.compressFromFile());
             file.setText(controller.compressFile() == null ? "" : controller.compressFile());
+            CompressOptions saved = controller.compressOptionsSaved();
+            overlay.setSelected(saved != null && saved.overlayTime());
             if (!usable) {
                 return;
             }
@@ -210,7 +212,6 @@ public final class CompressPanel extends VBox {
             qualityValue.setText(Messages.get("compress.quality.value", o.quality()));
             segment.setValue(SEGMENT_CHOICES.contains(o.segmentSeconds()) ? o.segmentSeconds() : 0);
             parallel.getValueFactory().setValue(o.concurrency());
-            overlay.setSelected(o.overlayTime());
 
         } finally {
             loading = false;

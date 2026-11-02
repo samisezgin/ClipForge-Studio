@@ -326,7 +326,7 @@ public final class SegmentedEncoder implements JobExecutor {
                 seq = state.getNextSequence();
             }
             Path temp = CompressRecovery.segmentFile(spec, next);
-            FragmentedMp4.AppendResult r = FragmentedMp4.append(part, base, temp, ticks, seq); // flushed to disk
+            FragmentedMp4.AppendResult r = appendWithRetry(part, base, temp, ticks, seq, state); // flushed to disk
             if (base == null) {
                 base = FragmentedMp4.inspect(temp);
             }
@@ -339,6 +339,38 @@ public final class SegmentedEncoder implements JobExecutor {
             ctx.save(); // committed point persisted before the temp file disappears
             Files.deleteIfExists(temp);
         }
+    }
+
+    /**
+     * Some players lock a file they are showing; retry the append a few times. A failed attempt may have written
+     * part of the segment, so the output is cut back to the committed point before each retry.
+     */
+    private static FragmentedMp4.AppendResult appendWithRetry(Path part, FragmentedMp4.Info base, Path temp,
+                                                              long ticks, int seq, CompressState state)
+            throws IOException {
+        IOException last = null;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try {
+                return FragmentedMp4.append(part, base, temp, ticks, seq);
+            } catch (FragmentedMp4.IncompatibleException e) {
+                throw e;
+            } catch (IOException e) {
+                last = e;
+                LOG.warning("Appending to " + part.getFileName() + " failed (" + e.getMessage() + "), retrying");
+                try {
+                    Thread.sleep(1000L * (attempt + 1));
+                    if (Files.exists(part)) {
+                        FragmentedMp4.truncate(part, state.getCommittedBytes());
+                    }
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                } catch (IOException ignored) {
+                    // still locked; next attempt
+                }
+            }
+        }
+        throw last;
     }
 
     private SegmentResult encode(CompressSpec spec, SegmentRecord s, CancellationToken token,

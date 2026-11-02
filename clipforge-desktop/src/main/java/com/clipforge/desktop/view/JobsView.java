@@ -92,6 +92,7 @@ public final class JobsView extends VBox {
         private final Label detail = new Label();
         private final ProgressBar bar = new ProgressBar(0);
         private final Button cancel = new Button(Messages.get("common.cancel"));
+        private final Button retry = new Button(Messages.get("jobs.retry"));
         private final Button open = new Button(Messages.get("jobs.openFolder"));
         private final Button watch = new Button(Messages.get("jobs.openOutput"));
         private final Label kind = new Label();
@@ -102,13 +103,15 @@ public final class JobsView extends VBox {
             detail.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
             bar.setMaxWidth(Double.MAX_VALUE);
             cancel.getStyleClass().addAll(Styles.SMALL, Styles.FLAT);
+            retry.getStyleClass().addAll(Styles.SMALL, Styles.FLAT, Styles.ACCENT);
             open.getStyleClass().addAll(Styles.SMALL, Styles.FLAT);
             watch.getStyleClass().addAll(Styles.SMALL, Styles.FLAT);
             watch.setTooltip(new Tooltip(Messages.get("jobs.openOutput.tip")));
+            retry.setTooltip(new Tooltip(Messages.get("jobs.retry.tip")));
             kind.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
-            HBox top = new HBox(8, kind, name, state, spacer, watch, open, cancel);
+            HBox top = new HBox(8, kind, name, state, spacer, watch, open, retry, cancel);
             top.setAlignment(Pos.CENTER_LEFT);
             box = new VBox(4, top, bar, detail);
         }
@@ -154,7 +157,7 @@ public final class JobsView extends VBox {
                         CompressState st = job.getCompress();
                         detail.setText(p == null ? Messages.get("jobs.detail.starting")
                                 : Messages.get("jobs.detail.compressing", Formats.duration(p.processed()),
-                                Formats.duration(total), Formats.duration(Duration.ofMillis(st.appendedMs())),
+                                Formats.duration(total), Formats.duration(Duration.ofMillis(controller.appendedMs(job))),
                                 p.speed(), Formats.duration(p.eta()), Formats.size(st.getCommittedBytes())));
                     } else {
                         detail.setText(p == null ? Messages.get("jobs.detail.starting")
@@ -172,9 +175,9 @@ public final class JobsView extends VBox {
                 }
                 default -> {
                     bar.setProgress(0);
-                    if (compress && job.getCompress().appendedMs() > 0) {
+                    if (compress && controller.appendedMs(job) > 0) {
                         detail.setText(Messages.get("jobs.detail.compressPaused",
-                                Formats.duration(Duration.ofMillis(job.getCompress().appendedMs())),
+                                Formats.duration(Duration.ofMillis(controller.appendedMs(job))),
                                 Formats.duration(total), Formats.size(job.getCompress().getCommittedBytes())));
                     } else {
                         detail.setText(Messages.get("jobs.detail.inputs", job.inputCount(),
@@ -187,6 +190,9 @@ public final class JobsView extends VBox {
             cancel.setVisible(s.unfinished());
             cancel.setManaged(s.unfinished());
             cancel.setOnAction(e -> controller.cancelJob(job));
+            retry.setVisible(s == JobState.FAILED);
+            retry.setManaged(s == JobState.FAILED);
+            retry.setOnAction(e -> controller.retryJob(job));
             open.setVisible(s == JobState.DONE);
             open.setManaged(s == JobState.DONE);
             boolean canWatch = compress && (s == JobState.RUNNING || s == JobState.PAUSED) && Files.exists(growing);

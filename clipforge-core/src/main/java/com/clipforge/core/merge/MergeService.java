@@ -25,7 +25,7 @@ import java.util.logging.Logger;
 /**
  * Lossless merge with FFmpeg's concat demuxer and stream copy. Only the first video and audio stream are mapped:
  * camera-specific data streams (e.g. SigmaStar {@code ssmd} GPS/metadata) cannot be written by FFmpeg to MP4, MOV or
- * MKV, so they are dropped. Telemetry is exported separately (planned, see docs/PLAN.md phase 4).
+ * MKV, so they are dropped. Their telemetry can be read and exported on the Telemetry tab.
  * <p>
  * FFmpeg writes to {@code <name>.part.mp4} next to the output (it grows and stays playable while merging); only on
  * success is it renamed to the final name, without replacing anything. ClipForge only ever deletes {@code .part}

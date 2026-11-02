@@ -79,6 +79,9 @@ public final class MainView {
 
     /** Detaches this view from the controller; call before replacing it (e.g. on language change). */
     public void dispose() {
+        if (audioPanel != null) {
+            audioPanel.commitPending();
+        }
         listeners.dispose();
         stage.titleProperty().unbind();
     }
@@ -175,7 +178,11 @@ public final class MainView {
         tools.getItems().add(item("menu.tools.ffmpeg", null, this::chooseFfmpeg));
 
         Menu help = new Menu(Messages.get("menu.help"));
-        help.getItems().add(item("menu.help.about", null, this::about));
+        help.getItems().addAll(item("menu.help.logs", null, () -> {
+            if (host != null) {
+                host.showDocument(AppSettings.homeDir().resolve("logs").toUri().toString());
+            }
+        }), item("menu.help.about", null, this::about));
 
         return new MenuBar(file, view, tools, help);
     }
@@ -225,6 +232,12 @@ public final class MainView {
         Label label = new Label(Messages.get("folders.label"));
         label.getStyleClass().add(Styles.TEXT_MUTED);
         listeners.on(controller.folders(), (ListChangeListener<String>) c -> refreshFolders());
+        listeners.on(controller.pendingRecoveryProperty(), (o, a, b) -> {
+            if (b != null && !b.isEmpty()) {
+                controller.pendingRecoveryProperty().set(null);
+                Platform.runLater(() -> showRecovery(b));
+            }
+        });
         refreshFolders();
         HBox box = new HBox(8, label, folderChips);
         box.setAlignment(Pos.CENTER_LEFT);
@@ -258,9 +271,11 @@ public final class MainView {
                 : Messages.get("status.ffmpegVersion", controller.toolsProperty().get().version()),
                 controller.toolsProperty()));
         ffmpeg.getStyleClass().add(Styles.TEXT_MUTED);
+        Label version = new Label(ClipForge.displayVersion());
+        version.getStyleClass().add(Styles.TEXT_MUTED);
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox bar = new HBox(8, status, spacer, ffmpeg);
+        HBox bar = new HBox(8, status, spacer, version, new Label("·"), ffmpeg);
         bar.setPadding(new Insets(4, 12, 4, 12));
         bar.getStyleClass().add("status-bar");
         return bar;
@@ -451,8 +466,9 @@ public final class MainView {
         Alert a = new Alert(Alert.AlertType.INFORMATION);
         a.initOwner(stage);
         a.setTitle(Messages.get("menu.help.about"));
-        a.setHeaderText(ClipForge.NAME + " " + ClipForge.version());
-        a.setContentText(Messages.get("about.text"));
+        a.setHeaderText(ClipForge.NAME + " " + ClipForge.displayVersion());
+        String ffmpeg = controller.toolsProperty().get() == null ? "-" : controller.toolsProperty().get().version();
+        a.setContentText(Messages.get("about.text", ffmpeg));
         a.showAndWait();
     }
 
@@ -497,9 +513,17 @@ public final class MainView {
         ButtonType resume = new ButtonType(Messages.get("recovery.resume"), ButtonBar.ButtonData.OK_DONE);
         ButtonType later = new ButtonType(Messages.get("recovery.later"), ButtonBar.ButtonData.OTHER);
         ButtonType discard = new ButtonType(Messages.get("recovery.discard"), ButtonBar.ButtonData.CANCEL_CLOSE);
-        a.getButtonTypes().setAll(resume, later, discard);
+        ButtonType unchanged = new ButtonType(Messages.get("recovery.unchanged"), ButtonBar.ButtonData.OTHER);
+        boolean anyChanged = actionable.stream().anyMatch(i -> i.kind() == RecoveryService.Kind.SOURCE_CHANGED);
+        if (anyChanged) {
+            a.getButtonTypes().setAll(resume, unchanged, later, discard);
+        } else {
+            a.getButtonTypes().setAll(resume, later, discard);
+        }
         ButtonType choice = a.showAndWait().orElse(later);
-        if (choice == resume) {
+        if (choice == unchanged) {
+            controller.acceptSourcesUnchanged(actionable);
+        } else if (choice == resume) {
             controller.resumeInterrupted(actionable, true);
         } else if (choice == discard) {
             controller.cancelJobs(actionable);

@@ -3,6 +3,8 @@ package com.clipforge.core.project;
 public enum JobState {
     PENDING,
     RUNNING,
+    /** Also used for states written by a newer version: such a job waits for the user. */
+    @com.fasterxml.jackson.annotation.JsonEnumDefaultValue
     PAUSED,
     DONE,
     FAILED,

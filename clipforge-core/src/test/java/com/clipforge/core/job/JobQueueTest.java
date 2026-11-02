@@ -96,6 +96,29 @@ class JobQueueTest {
         assertTrue(Files.notExists(tmp.resolve("x-out.mp4")));
     }
 
+    @Test
+    void failedJobCanBeRetried() throws Exception {
+        FfmpegTools tools = FfmpegTestSupport.requireFfmpeg();
+        Path in = Files.writeString(tmp.resolve("later.mp4"), "not yet a video");
+        Project project = new Project();
+        JobQueue q = new JobQueue(project, new MergeService(tools), () -> { }, new NoopListener(), Clock.systemUTC());
+        JobRecord a = job(in, "later-out.mp4");
+        q.submit(List.of(a));
+        assertTrue(q.awaitIdle(Duration.ofSeconds(60)));
+        assertEquals(JobState.FAILED, a.getState());
+        FfmpegTestSupport.makeClip(tools, in, 2, "160x90"); // the problem was fixed - by replacing the source
+        q.retry(a);
+        assertTrue(q.awaitIdle(Duration.ofSeconds(60)));
+        assertEquals(JobState.PAUSED, a.getState(), "a changed source is never used without asking");
+        assertEquals("error.sourceChanged", a.getErrorKey());
+
+        com.clipforge.core.project.RecoveryService.acceptChangedSources(a); // the user confirms the new file
+        q.resume();
+        assertTrue(q.awaitIdle(Duration.ofSeconds(60)));
+        assertEquals(JobState.DONE, a.getState());
+        assertEquals(null, a.getErrorKey());
+    }
+
     private static final class NoopListener implements JobQueue.Listener {
         @Override
         public void jobChanged(JobRecord job) {
