@@ -90,6 +90,8 @@ public final class AppController {
     private final ObjectProperty<Integer> projectVersion = new SimpleObjectProperty<>(0);
 
     private JobQueue queue;
+    private int scanGeneration;
+    private boolean rescanRequested;
     private final PauseTransition saveDebounce = new PauseTransition(Duration.millis(800));
 
     public AppController(AppSettings settings) {
@@ -113,6 +115,12 @@ public final class AppController {
             settings.setFfmpegDir(dir.toString());
             tools.set(found.get());
             rebuildQueue();
+            // jobs the user already chose to resume (e.g. in the recovery dialog) start now that FFmpeg exists
+            if (queue != null && !queue.isPaused() && project.getJobs().stream()
+                    .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PENDING)) {
+                queueRunning.set(true);
+                queue.start();
+            }
         }
         return found.isPresent();
     }
@@ -124,37 +132,77 @@ public final class AppController {
         if (Files.isRegularFile(file)) {
             try {
                 load(file);
+                if (!untitled.get()) {
+                    settings.addRecentProject(file.toString());
+                }
                 return RecoveryService.analyze(project);
             } catch (IOException e) {
                 LOG.log(Level.WARNING, "Cannot open last project " + file, e);
                 setStatus("status.openFailed", file.getFileName(), e.getMessage());
+                if (file.equals(untitledFile())) {
+                    keepUnreadableAutosave(file);
+                }
             }
         }
-        newProject();
+        startEmptyProject();
         return List.of();
+    }
+
+    /** An unreadable autosave may be the only copy of the user's work: keep it under another name. */
+    private void keepUnreadableAutosave(Path file) {
+        try {
+            Path bad = file.resolveSibling(file.getFileName() + ".bad-" + clock.millis());
+            Files.move(file, bad);
+            LOG.warning("Unreadable autosave kept as " + bad);
+        } catch (IOException e) {
+            LOG.log(Level.WARNING, "Cannot rename unreadable autosave", e);
+        }
+    }
+
+    private void startEmptyProject() {
+        project = new Project();
+        projectFile.set(untitledFile());
+        untitled.set(true);
+        settings.setLastProject("");
+        afterProjectChanged();
     }
 
     // ------------------------------------------------------------------ project files
 
+    /** {@code true} if switching projects would drop resumable jobs of an untitled project. */
+    public boolean switchingLosesJobs() {
+        return untitled.get() && project.hasUnfinishedJobs();
+    }
+
+    /** Starts an empty project. The caller confirms first if {@link #switchingLosesJobs()}. */
     public void newProject() {
-        project = new Project();
-        projectFile.set(untitledFile());
-        untitled.set(true);
-        afterProjectChanged();
-        try {
-            Files.deleteIfExists(untitledFile());
-        } catch (IOException ignored) {
-            // stale autosave is overwritten on next save anyway
+        if (isQueueRunning()) {
+            throw new IllegalStateException("jobs are running");
         }
-        settings.setLastProject("");
+        saveNow(); // a named project keeps its paused jobs in its own file
+        boolean wasUntitled = untitled.get();
+        startEmptyProject();
+        if (wasUntitled) {
+            try {
+                Files.deleteIfExists(untitledFile()); // the user discarded the untitled project
+            } catch (IOException ignored) {
+                // overwritten by the next autosave anyway
+            }
+        }
     }
 
     /** Opens a project file and returns interrupted work found in it. */
     public List<RecoveryService.Issue> open(Path file) throws IOException {
-        if (queue != null && queue.isRunning()) {
+        if (isQueueRunning()) {
             throw new IOException(Messages.get("error.busy"));
         }
-        load(file);
+        saveNow();
+        try {
+            load(file);
+        } catch (IOException e) {
+            settings.removeRecentProject(file.toString());
+            throw e;
+        }
         settings.addRecentProject(file.toString());
         return RecoveryService.analyze(project);
     }
@@ -171,7 +219,10 @@ public final class AppController {
 
     public void saveAs(Path file) throws IOException {
         Path target = ProjectStore.withExtension(file);
-        ProjectStore.save(project, target);
+        synchronized (project) {
+            syncSelection();
+            ProjectStore.save(project, target);
+        }
         projectFile.set(target);
         untitled.set(false);
         settings.setLastProject(target.toString());
@@ -183,14 +234,19 @@ public final class AppController {
         Path f = projectFile.get() != null ? projectFile.get() : untitledFile();
         try {
             synchronized (project) {
-                project.getSelectedClips().clear();
-                selected.forEach(p -> project.getSelectedClips().add(p.toString()));
+                syncSelection();
                 ProjectStore.save(project, f);
             }
         } catch (IOException e) {
             LOG.log(Level.WARNING, "Autosave failed", e);
             setStatus("status.saveFailed", e.getMessage());
         }
+    }
+
+    /** Copies the UI selection into the project. Caller holds the project monitor. */
+    private void syncSelection() {
+        project.getSelectedClips().clear();
+        selected.forEach(p -> project.getSelectedClips().add(p.toString()));
     }
 
     private void scheduleSave() {
@@ -204,6 +260,10 @@ public final class AppController {
         selected.clear();
         project.getSelectedClips().forEach(s -> selected.add(Path.of(s)));
         sessions.clear();
+        queueRunning.set(false);
+        queuePaused.set(project.getJobs().stream()
+                .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PAUSED));
+        scanGeneration++; // results of a scan started for the previous project are discarded
         projectVersion.set(projectVersion.get() + 1);
         rebuildQueue();
         rescan();
@@ -242,13 +302,17 @@ public final class AppController {
     private void saveFromWorker() {
         Path f = projectFile.get() != null ? projectFile.get() : untitledFile();
         Project p = project;
-        try {
-            synchronized (p) {
-                ProjectStore.save(p, f);
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                synchronized (p) {
+                    ProjectStore.save(p, f);
+                }
+                return;
+            } catch (IOException e) {
+                LOG.log(Level.WARNING, "Saving job state failed (attempt " + (attempt + 1) + ")", e);
             }
-        } catch (IOException e) {
-            LOG.log(Level.WARNING, "Saving job state failed", e);
         }
+        Platform.runLater(() -> setStatus("status.saveFailed", f.getFileName()));
     }
 
     private void refreshJob(JobRecord job) {
@@ -264,8 +328,11 @@ public final class AppController {
 
     public void addFolder(Path dir) {
         String s = dir.toAbsolutePath().toString();
-        if (!project.getFolders().contains(s)) {
-            project.getFolders().add(s);
+        boolean added;
+        synchronized (project) {
+            added = !project.getFolders().contains(s) && project.getFolders().add(s);
+        }
+        if (added) {
             folders.setAll(project.getFolders());
             settings.setLastFolder(s);
             scheduleSave();
@@ -274,7 +341,9 @@ public final class AppController {
     }
 
     public void removeFolder(String dir) {
-        project.getFolders().remove(dir);
+        synchronized (project) {
+            project.getFolders().remove(dir);
+        }
         folders.setAll(project.getFolders());
         scheduleSave();
         rescan();
@@ -287,9 +356,12 @@ public final class AppController {
             return;
         }
         if (scanning.get()) {
+            rescanRequested = true; // run again when the current scan ends, e.g. after adding a folder
             return;
         }
         scanning.set(true);
+        rescanRequested = false;
+        int generation = ++scanGeneration;
         setStatus("status.scanning", 0, "?");
         List<Path> dirs = project.getFolders().stream().map(Path::of).toList();
         Thread.ofVirtual().start(() -> {
@@ -299,23 +371,41 @@ public final class AppController {
                 List<Clip> clips = scanner.scan(dirs, (done, total) ->
                         Platform.runLater(() -> setStatus("status.scanning", done, total)));
                 List<Session> grouped = new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
-                Platform.runLater(() -> applyScan(clips, grouped));
+                Platform.runLater(() -> applyScan(generation, clips, grouped));
             } catch (IOException e) {
                 Platform.runLater(() -> {
                     scanning.set(false);
                     setStatus("status.scanFailed", e.getMessage());
+                    rescanIfRequested();
                 });
             }
         });
     }
 
-    private void applyScan(List<Clip> clips, List<Session> grouped) {
+    private void rescanIfRequested() {
+        if (rescanRequested) {
+            rescanRequested = false;
+            rescan();
+        }
+    }
+
+    private void applyScan(int generation, List<Clip> clips, List<Session> grouped) {
+        scanning.set(false);
+        if (generation != scanGeneration) {
+            // the project or its folders changed while scanning: these results are stale
+            rescan();
+            return;
+        }
         Set<Path> present = new HashSet<>();
         int copying = 0;
         for (Clip c : clips) {
             present.add(c.path());
             String key = c.path().toString();
-            if (c.selectable() && project.getSeenClips().add(key)) {
+            boolean isNew;
+            synchronized (project) {
+                isNew = c.selectable() && project.getSeenClips().add(key);
+            }
+            if (isNew) {
                 selected.add(c.path()); // newly found ready clips are selected by default
             }
             if (!c.selectable()) {
@@ -327,7 +417,6 @@ public final class AppController {
         }
         selected.retainAll(present);
         sessions.setAll(grouped);
-        scanning.set(false);
         if (copying > 0) {
             setStatus("status.scannedCopying", clips.size(), grouped.size(), copying);
         } else {
@@ -335,6 +424,7 @@ public final class AppController {
         }
         bumpSelection();
         scheduleSave();
+        rescanIfRequested();
     }
 
     // ------------------------------------------------------------------ selection
@@ -406,7 +496,9 @@ public final class AppController {
     }
 
     public void setMergeMode(MergeMode mode) {
-        project.setMergeMode(mode);
+        synchronized (project) {
+            project.setMergeMode(mode);
+        }
         scheduleSave();
     }
 
@@ -415,7 +507,9 @@ public final class AppController {
     }
 
     public void setMergeOptions(MergeOptions options) {
-        project.setMergeOptions(options);
+        synchronized (project) {
+            project.setMergeOptions(options);
+        }
         scheduleSave();
     }
 
@@ -424,7 +518,9 @@ public final class AppController {
     }
 
     public void setOutputDir(Path dir) {
-        project.setOutputDir(dir == null ? null : dir.toAbsolutePath().toString());
+        synchronized (project) {
+            project.setOutputDir(dir == null ? null : dir.toAbsolutePath().toString());
+        }
         scheduleSave();
     }
 
@@ -445,8 +541,13 @@ public final class AppController {
         Path outDir = Path.of(out);
         try {
             Files.createDirectories(outDir);
+            List<Path> reserved;
+            synchronized (project) {
+                reserved = project.getJobs().stream().filter(j -> j.getState().unfinished())
+                        .map(j -> Path.of(j.output())).toList();
+            }
             List<MergeSpec> specs = MergePlanner.plan(sessions, selected, project.getMergeMode(), outDir,
-                    project.getMergeOptions());
+                    project.getMergeOptions(), reserved);
             long total = specs.stream().mapToLong(MergeSpec::totalBytes).sum();
             long largest = specs.stream().mapToLong(MergeSpec::totalBytes).max().orElse(0);
             DiskCheck.Result disk = DiskCheck.check(outDir, total, largest);
@@ -475,13 +576,16 @@ public final class AppController {
             }
             created.add(JobRecord.merge(s, fps, clock.instant()));
         }
-        saveNow();
-        if (queue != null && queue.isPaused()) {
-            queue.resume();
+        if (queue == null) {
+            throw new IOException(Messages.get("error.noFfmpeg"));
         }
-        queueRunning.set(true);
-        queuePaused.set(false);
+        saveNow();
+        // start the new jobs only; jobs the user paused earlier stay paused until "Resume"
         queue.submit(created);
+        queue.unpause();
+        queueRunning.set(true);
+        queuePaused.set(project.getJobs().stream()
+                .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PAUSED));
     }
 
     public void pauseQueue() {
@@ -525,20 +629,30 @@ public final class AppController {
 
     /** Applies the user's recovery decision. */
     public void resumeInterrupted(List<RecoveryService.Issue> issues, boolean startNow) {
-        try {
-            for (RecoveryService.Issue i : issues) {
-                if (i.kind() == RecoveryService.Kind.SOURCE_CHANGED) {
-                    RecoveryService.acceptChangedSources(i.job());
-                }
-                if (i.kind() != RecoveryService.Kind.OUTPUT_MISSING) {
+        int failed = 0;
+        for (RecoveryService.Issue i : issues) {
+            if (i.kind() == RecoveryService.Kind.OUTPUT_MISSING) {
+                continue;
+            }
+            synchronized (project) {
+                try {
+                    if (i.kind() == RecoveryService.Kind.SOURCE_CHANGED) {
+                        RecoveryService.acceptChangedSources(i.job());
+                    }
                     RecoveryService.prepareResume(i.job(), clock.instant());
-                    if (!startNow) {
+                    if (!startNow && i.job().getState() == com.clipforge.core.project.JobState.PENDING) {
                         i.job().setState(com.clipforge.core.project.JobState.PAUSED);
                     }
+                } catch (IOException e) {
+                    // e.g. an orphaned FFmpeg from the crashed session still holds the partial file
+                    LOG.log(Level.WARNING, "Cannot prepare job for resume", e);
+                    i.job().fail("error.io", null, String.valueOf(e.getMessage()));
+                    failed++;
                 }
             }
-        } catch (IOException e) {
-            setStatus("error.io", e.getMessage());
+        }
+        if (failed > 0) {
+            setStatus("status.recoveryFailed", failed);
         }
         jobs.setAll(project.getJobs());
         saveNow();
@@ -555,8 +669,17 @@ public final class AppController {
     }
 
     public void cancelJobs(List<RecoveryService.Issue> issues) {
-        for (RecoveryService.Issue i : issues) {
-            i.job().setState(com.clipforge.core.project.JobState.CANCELLED);
+        synchronized (project) {
+            for (RecoveryService.Issue i : issues) {
+                i.job().setState(com.clipforge.core.project.JobState.CANCELLED);
+                if (i.job().output() != null) {
+                    try {
+                        Files.deleteIfExists(com.clipforge.core.util.OutputNaming.partOf(Path.of(i.job().output())));
+                    } catch (IOException ignored) {
+                        // a leftover .part file is harmless
+                    }
+                }
+            }
         }
         jobs.setAll(project.getJobs());
         saveNow();

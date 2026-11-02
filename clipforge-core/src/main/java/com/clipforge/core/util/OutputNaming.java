@@ -44,6 +44,13 @@ public final class OutputNaming {
         return sb.append('_').append(suffix).append('.').append(extension).toString();
     }
 
+    /** Temporary sibling written while an output is produced: {@code a/b.mp4} → {@code a/b.part.mp4}. */
+    public static Path partOf(Path output) {
+        String n = output.getFileName().toString();
+        int dot = n.lastIndexOf('.');
+        return output.resolveSibling(dot > 0 ? n.substring(0, dot) + ".part" + n.substring(dot) : n + ".part");
+    }
+
     /**
      * Returns a path in {@code dir} that neither exists on disk nor is in {@code reserved}, appending
      * {@code " (2)"}, {@code " (3)"}, ... when needed.
@@ -54,7 +61,7 @@ public final class OutputNaming {
         String stem = dot > 0 ? fileName.substring(0, dot) : fileName;
         String ext = dot > 0 ? fileName.substring(dot) : "";
         Path candidate = dir.resolve(fileName);
-        for (int i = 2; Files.exists(candidate) || taken.contains(candidate); i++) {
+        for (int i = 2; Files.exists(candidate) || Files.exists(partOf(candidate)) || taken.contains(candidate); i++) {
             candidate = dir.resolve(stem + " (" + i + ")" + ext);
         }
         return candidate;

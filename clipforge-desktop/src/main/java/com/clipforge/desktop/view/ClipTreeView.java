@@ -46,7 +46,12 @@ public final class ClipTreeView extends TreeTableView<ClipTreeView.Row> {
 
     private final AppController controller;
 
-    public ClipTreeView(AppController controller) {
+    /** Keys of collapsed day/session rows; kept across rebuilds so a rescan does not reset the tree. */
+    private final java.util.Set<String> collapsed = new java.util.HashSet<>();
+    /** Sessions the user expanded although they would be collapsed by default. */
+    private final java.util.Set<String> expanded = new java.util.HashSet<>();
+
+    public ClipTreeView(AppController controller, ListenerBag listeners) {
         this.controller = controller;
         setShowRoot(false);
         setRoot(new TreeItem<>());
@@ -66,8 +71,8 @@ public final class ClipTreeView extends TreeTableView<ClipTreeView.Row> {
         getColumns().add(text(Messages.get("clips.col.size"), 90, this::sizeText));
         getColumns().add(text(Messages.get("clips.col.info"), 200, this::infoText));
 
-        controller.sessions().addListener((ListChangeListener<Session>) c -> rebuild());
-        controller.selectionVersionProperty().addListener((o, a, b) -> refresh());
+        listeners.on(controller.sessions(), (ListChangeListener<Session>) c -> rebuild());
+        listeners.on(controller.selectionVersionProperty(), (o, a, b) -> refresh());
         rebuild();
     }
 
@@ -87,10 +92,15 @@ public final class ClipTreeView extends TreeTableView<ClipTreeView.Row> {
         TreeItem<Row> root = new TreeItem<>();
         for (Map.Entry<LocalDate, List<Session>> e : byDay.entrySet()) {
             TreeItem<Row> day = new TreeItem<>(new DayRow(e.getKey(), e.getValue()));
-            day.setExpanded(true);
+            String dayKey = "d:" + e.getKey();
+            day.setExpanded(!collapsed.contains(dayKey));
+            track(day, dayKey, true);
             for (Session s : e.getValue()) {
                 TreeItem<Row> si = new TreeItem<>(new SessionRow(s));
-                si.setExpanded(s.clips().size() <= 3);
+                String key = "s:" + s.id();
+                boolean byDefault = s.clips().size() <= 3;
+                si.setExpanded(byDefault ? !collapsed.contains(key) : expanded.contains(key));
+                track(si, key, byDefault);
                 for (Clip c : s.clips()) {
                     si.getChildren().add(new TreeItem<>(new ClipRow(c)));
                 }
@@ -99,6 +109,23 @@ public final class ClipTreeView extends TreeTableView<ClipTreeView.Row> {
             root.getChildren().add(day);
         }
         setRoot(root);
+    }
+
+    /** Remembers the user's expand/collapse choice for a row across rebuilds. */
+    private void track(TreeItem<Row> item, String key, boolean expandedByDefault) {
+        item.expandedProperty().addListener((o, was, now) -> {
+            if (expandedByDefault) {
+                if (now) {
+                    collapsed.remove(key);
+                } else {
+                    collapsed.add(key);
+                }
+            } else if (now) {
+                expanded.add(key);
+            } else {
+                expanded.remove(key);
+            }
+        });
     }
 
     // ----------------------------------------------------------------- selection helpers
@@ -220,6 +247,9 @@ public final class ClipTreeView extends TreeTableView<ClipTreeView.Row> {
         }
         if (c.status() == ClipStatus.UNREADABLE) {
             return Messages.get("clips.status.unreadable");
+        }
+        if (c.status() == ClipStatus.DUPLICATE) {
+            return Messages.get("clips.status.duplicate");
         }
         var m = c.media();
         return m.videoCodec() + " " + m.resolution() + (m.hasAudio() ? " · " + m.audioCodec() : "");

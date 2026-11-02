@@ -53,15 +53,19 @@ public final class SessionGrouper {
         List<Clip> current = new ArrayList<>();
         LocalDateTime previousSessionEnd = null;
         Clip prev = null;
+        LocalDateTime maxEnd = null; // running maximum, so a short overlapping clip cannot split a session
         for (Clip c : sorted) {
-            if (prev != null && startsNewSession(prev, c, typical)) {
+            if (prev != null && startsNewSession(prev, maxEnd, c)) {
                 Session s = new Session(current, gap(previousSessionEnd, current.getFirst().start()));
                 result.add(s);
                 previousSessionEnd = s.end();
                 current = new ArrayList<>();
+                maxEnd = null;
             }
             current.add(c);
             prev = c;
+            LocalDateTime end = c.start().plus(c.duration().isZero() ? typical : c.duration());
+            maxEnd = maxEnd == null || end.isAfter(maxEnd) ? end : maxEnd;
         }
         if (!current.isEmpty()) {
             result.add(new Session(current, gap(previousSessionEnd, current.getFirst().start())));
@@ -69,10 +73,8 @@ public final class SessionGrouper {
         return result;
     }
 
-    private boolean startsNewSession(Clip prev, Clip next, Duration typical) {
-        Duration prevDuration = prev.duration().isZero() ? typical : prev.duration();
-        LocalDateTime expectedLatest = prev.start().plus(prevDuration).plus(tolerance);
-        if (next.start().isAfter(expectedLatest)) {
+    private boolean startsNewSession(Clip prev, LocalDateTime maxEnd, Clip next) {
+        if (next.start().isAfter(maxEnd.plus(tolerance))) {
             return true;
         }
         // unknown media (still copying) never forces a split on its own

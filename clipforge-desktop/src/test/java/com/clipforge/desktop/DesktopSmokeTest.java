@@ -113,6 +113,7 @@ class DesktopSmokeTest {
 
         Messages.use("tr", List.of());
         Stage trStage = onFx(() -> {
+            controller.retranslate();
             stage.close();
             return show(controller, "tr");
         });

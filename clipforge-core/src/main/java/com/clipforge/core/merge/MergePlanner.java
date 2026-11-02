@@ -7,9 +7,12 @@ import com.clipforge.core.util.OutputNaming;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /** Turns a clip selection into concrete {@link MergeSpec}s. */
@@ -26,6 +29,15 @@ public final class MergePlanner {
      */
     public static List<MergeSpec> plan(List<Session> sessions, Set<Path> selected, MergeMode mode, Path outputDir,
                                        MergeOptions options) throws IncompatibleClipsException {
+        return plan(sessions, selected, mode, outputDir, options, List.of());
+    }
+
+    /**
+     * @param reserved output paths already claimed by queued jobs; new outputs never reuse them
+     */
+    public static List<MergeSpec> plan(List<Session> sessions, Set<Path> selected, MergeMode mode, Path outputDir,
+                                       MergeOptions options, Collection<Path> reserved)
+            throws IncompatibleClipsException {
         List<List<Clip>> groups = new ArrayList<>();
         if (mode == MergeMode.PER_SESSION) {
             for (Session s : sessions) {
@@ -35,12 +47,15 @@ public final class MergePlanner {
                 }
             }
         } else {
-            List<Clip> all = new ArrayList<>();
+            // "all in one" still keeps camera channels apart: front and rear clips must never interleave
+            Map<String, List<Clip>> byChannel = new LinkedHashMap<>();
             for (Session s : sessions) {
-                all.addAll(pick(s.clips(), selected));
+                for (Clip c : pick(s.clips(), selected)) {
+                    byChannel.computeIfAbsent(c.channel() == null ? "" : c.channel(), k -> new ArrayList<>()).add(c);
+                }
             }
-            all.sort(Comparator.comparing(Clip::start).thenComparingLong(Clip::sequence));
-            if (!all.isEmpty()) {
+            for (List<Clip> all : byChannel.values()) {
+                all.sort(Comparator.comparing(Clip::start).thenComparingLong(Clip::sequence));
                 groups.add(all);
             }
         }
@@ -48,10 +63,10 @@ public final class MergePlanner {
             requireCompatible(g);
         }
         List<MergeSpec> specs = new ArrayList<>();
-        List<Path> reserved = new ArrayList<>();
+        List<Path> taken = new ArrayList<>(reserved);
         for (List<Clip> g : groups) {
-            Path out = OutputNaming.unique(outputDir, OutputNaming.baseName(g, "merged", options.extension()), reserved);
-            reserved.add(out);
+            Path out = OutputNaming.unique(outputDir, OutputNaming.baseName(g, "merged", options.extension()), taken);
+            taken.add(out);
             specs.add(new MergeSpec(
                     g.stream().map(c -> c.path().toString()).toList(),
                     out.toString(),

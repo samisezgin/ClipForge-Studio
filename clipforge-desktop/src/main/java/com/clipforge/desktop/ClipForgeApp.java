@@ -61,6 +61,9 @@ public class ClipForgeApp extends Application {
 
     /** (Re)creates the UI, e.g. after the language changed; application state stays in the controller. */
     private void showView() {
+        if (view != null) {
+            view.dispose();
+        }
         view = new MainView(controller, stage, getHostServices(), this::changeLanguage, this::changeTheme);
         Scene scene = new Scene(view.root());
         scene.getStylesheets().add(ClipForgeApp.class.getResource("app.css").toExternalForm());

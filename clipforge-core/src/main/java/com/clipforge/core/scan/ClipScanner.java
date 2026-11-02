@@ -6,7 +6,6 @@ import com.clipforge.core.model.ClipStatus;
 import com.clipforge.core.model.MediaInfo;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -61,6 +60,8 @@ public final class ClipScanner {
     public List<Clip> scan(List<Path> folders, BiConsumer<Integer, Integer> progress) throws IOException {
         List<Path> files = listVideos(folders);
         AtomicInteger done = new AtomicInteger();
+        Object progressLock = new Object();
+        int[] reported = {0};
         List<Clip> clips = new ArrayList<>(files.size());
         try (ExecutorService pool = Executors.newFixedThreadPool(parallelism)) {
             List<Future<Clip>> futures = new ArrayList<>(files.size());
@@ -68,7 +69,13 @@ public final class ClipScanner {
                 futures.add(pool.submit(() -> {
                     Clip c = scanFile(f);
                     if (progress != null) {
-                        progress.accept(done.incrementAndGet(), files.size());
+                        int n = done.incrementAndGet();
+                        synchronized (progressLock) { // keep reported values monotonic
+                            if (n > reported[0]) {
+                                reported[0] = n;
+                                progress.accept(n, files.size());
+                            }
+                        }
                     }
                     return c;
                 }));
@@ -80,9 +87,6 @@ public final class ClipScanner {
                         clips.add(c);
                     }
                 } catch (ExecutionException e) {
-                    if (e.getCause() instanceof UncheckedIOException u) {
-                        throw u.getCause();
-                    }
                     throw new IOException(e.getCause());
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -92,8 +96,28 @@ public final class ClipScanner {
         }
         clips.sort(Comparator.comparing((Clip c) -> c.channel() == null ? "" : c.channel())
                 .thenComparing(Clip::start)
-                .thenComparingLong(Clip::sequence));
-        return clips;
+                .thenComparingLong(Clip::sequence)
+                .thenComparing(c -> c.path().toString()));
+        return markDuplicates(clips);
+    }
+
+    /**
+     * The same recording found in two folders (e.g. SD card and a backup) would otherwise be merged twice.
+     * The first occurrence (in folder order) stays, later ones become {@link ClipStatus#DUPLICATE}.
+     */
+    static List<Clip> markDuplicates(List<Clip> clips) {
+        Set<String> seen = new java.util.HashSet<>();
+        List<Clip> result = new ArrayList<>(clips.size());
+        for (Clip c : clips) {
+            String key = c.channel() + "|" + c.start() + "|" + c.size();
+            if (c.status() == ClipStatus.READY && !seen.add(key)) {
+                result.add(new Clip(c.path(), c.size(), c.modified(), c.start(), c.startSource(), c.channel(),
+                        c.sequence(), c.media(), ClipStatus.DUPLICATE));
+            } else {
+                result.add(c);
+            }
+        }
+        return result;
     }
 
     /** Probes one file; returns {@code null} if it vanished in the meantime. */
@@ -105,7 +129,9 @@ public final class ClipScanner {
             return null;
         }
         Instant modified = attrs.lastModifiedTime().toInstant();
-        boolean recent = Duration.between(modified, clock.instant()).compareTo(COPYING_THRESHOLD) < 0;
+        Duration age = Duration.between(modified, clock.instant());
+        // a future mtime (camera clock ahead, UTC/local mix-up on FAT cards) is not "being copied"
+        boolean recent = !age.isNegative() && age.compareTo(COPYING_THRESHOLD) < 0;
         Optional<MediaInfo> media = probe.probe(file);
         ClipStatus status;
         if (media.isEmpty() || !media.get().hasVideo()) {

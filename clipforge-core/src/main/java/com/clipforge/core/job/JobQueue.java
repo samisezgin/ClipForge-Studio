@@ -26,7 +26,8 @@ import java.util.logging.Logger;
  * Runs the project's jobs one after another on a background thread.
  * <p>
  * All mutations of {@link JobRecord}s happen while holding the project's monitor, followed by a save through the
- * {@code persist} callback, so the project file always reflects the latest state.
+ * {@code persist} callback, so the project file always reflects the latest state. Picking the next job and marking
+ * it RUNNING is one atomic step, so a pause or cancel can never be overwritten by a job that is just starting.
  */
 public final class JobQueue {
 
@@ -50,6 +51,7 @@ public final class JobQueue {
     private final Listener listener;
     private final Clock clock;
 
+    /** Guards {@link #worker}; never held while waiting for the project monitor. */
     private final Object lock = new Object();
     private Thread worker;
     private volatile boolean pauseRequested;
@@ -66,7 +68,7 @@ public final class JobQueue {
         this.clock = clock;
     }
 
-    /** Adds jobs to the project and starts the worker if it is not running and not paused. */
+    /** Adds jobs to the project and starts the worker if it is not paused. */
     public void submit(List<JobRecord> jobs) {
         synchronized (project) {
             project.getJobs().addAll(jobs);
@@ -79,17 +81,19 @@ public final class JobQueue {
     /** Starts processing pending jobs unless paused. */
     public void start() {
         synchronized (lock) {
-            if (pauseRequested || (worker != null && worker.isAlive())) {
+            if (pauseRequested || worker != null) {
                 return;
             }
-            idleLatch = new CountDownLatch(1);
-            worker = Thread.ofPlatform().name("clipforge-jobs").daemon(true).start(this::loop);
+            CountDownLatch latch = new CountDownLatch(1);
+            idleLatch = latch;
+            worker = Thread.ofPlatform().name("clipforge-jobs").daemon(true).start(() -> loop(latch));
         }
     }
 
     public boolean isRunning() {
-        Thread w = worker;
-        return w != null && w.isAlive();
+        synchronized (lock) {
+            return worker != null;
+        }
     }
 
     public boolean isPaused() {
@@ -126,9 +130,8 @@ public final class JobQueue {
         }
     }
 
-    /** Clears the pause and continues with paused/pending jobs. */
+    /** Clears the pause and continues with all paused and pending jobs. */
     public void resume() {
-        pauseRequested = false;
         synchronized (project) {
             for (JobRecord j : project.getJobs()) {
                 if (j.getState() == JobState.PAUSED) {
@@ -137,20 +140,26 @@ public final class JobQueue {
             }
         }
         persist.run();
+        unpause();
+    }
+
+    /** Clears the pause flag and runs PENDING jobs only; jobs the user left PAUSED stay paused. */
+    public void unpause() {
+        pauseRequested = false;
         start();
     }
 
-    /** Cancels one job: running → stopped and output removed; pending/paused → cancelled. */
+    /** Cancels one job: running → stopped and partial output removed; pending/paused → cancelled. */
     public void cancel(JobRecord job) {
-        if (job == current) {
-            stopMode = StopMode.CANCEL_JOB;
-            CancellationToken t = currentToken;
-            if (t != null) {
-                t.cancel();
-            }
-            return;
-        }
         synchronized (project) {
+            if (job == current) {
+                stopMode = StopMode.CANCEL_JOB;
+                CancellationToken t = currentToken;
+                if (t != null) {
+                    t.cancel();
+                }
+                return;
+            }
             if (job.getState().unfinished()) {
                 update(job, JobState.CANCELLED);
             }
@@ -163,43 +172,72 @@ public final class JobQueue {
         return idleLatch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    private void loop() {
+    private void loop(CountDownLatch latch) {
         try {
-            while (!pauseRequested) {
-                JobRecord next;
-                synchronized (project) {
-                    next = project.getJobs().stream()
-                            .filter(j -> j.getState() == JobState.PENDING).findFirst().orElse(null);
-                }
+            while (true) {
+                JobRecord next = claimNext();
                 if (next == null) {
-                    break;
+                    // decide to exit under the lock, then re-check: a resume/submit racing with the exit
+                    // must either see the worker alive (and rely on it) or start a new one
+                    synchronized (lock) {
+                        if (pauseRequested || !hasPending()) {
+                            worker = null;
+                            break;
+                        }
+                    }
+                    continue;
                 }
                 runJob(next);
             }
         } finally {
-            current = null;
-            currentToken = null;
-            idleLatch.countDown();
-            listener.idle();
+            latch.countDown();
+            boolean replaced;
+            synchronized (lock) {
+                if (worker == Thread.currentThread()) {
+                    worker = null; // also after an unexpected Error
+                }
+                replaced = worker != null; // a new worker was started while this one was finishing
+            }
+            if (!replaced) {
+                listener.idle();
+            }
         }
     }
 
-    private void runJob(JobRecord job) {
-        current = job;
-        stopMode = StopMode.NONE;
-        CancellationToken token = new CancellationToken();
-        currentToken = token;
+    private boolean hasPending() {
         synchronized (project) {
-            job.clearError();
-            update(job, JobState.RUNNING);
+            return project.getJobs().stream().anyMatch(j -> j.getState() == JobState.PENDING);
+        }
+    }
+
+    /** Atomically picks the first PENDING job and marks it RUNNING; {@code null} if paused or nothing to do. */
+    private JobRecord claimNext() {
+        JobRecord next;
+        synchronized (project) {
+            if (pauseRequested) {
+                return null;
+            }
+            next = project.getJobs().stream().filter(j -> j.getState() == JobState.PENDING).findFirst().orElse(null);
+            if (next == null) {
+                return null;
+            }
+            stopMode = StopMode.NONE;
+            currentToken = new CancellationToken();
+            current = next;
+            next.clearError();
+            update(next, JobState.RUNNING);
         }
         persist.run();
+        return next;
+    }
+
+    private void runJob(JobRecord job) {
+        CancellationToken token = currentToken;
         try {
             MergeSpec spec = job.getMerge();
             Path out = Path.of(spec.output());
-            Files.createDirectories(out.toAbsolutePath().getParent());
-            DiskCheck.Result disk = DiskCheck.check(out.toAbsolutePath().getParent(), spec.totalBytes(),
-                    spec.totalBytes());
+            Path dir = out.toAbsolutePath().getParent();
+            DiskCheck.Result disk = DiskCheck.check(dir, spec.totalBytes(), spec.totalBytes());
             if (!disk.enoughSpace()) {
                 finishFailed(job, "error.diskSpace", null,
                         Formats.size(disk.requiredBytes()), Formats.size(disk.usableBytes()));
@@ -209,6 +247,7 @@ public final class JobQueue {
                 finishFailed(job, "error.fat32", null, disk.fileSystem());
                 return;
             }
+            Files.createDirectories(dir);
             FfmpegResult r = merge.merge(spec, p -> listener.progress(job, p), token);
             synchronized (project) {
                 if (r.success() && Files.isRegularFile(out)) {
@@ -216,17 +255,23 @@ public final class JobQueue {
                 } else if (r.cancelled()) {
                     update(job, stopMode == StopMode.STOP_NOW ? JobState.PAUSED : JobState.CANCELLED);
                 } else {
-                    job.fail("error.ffmpeg", tail(r.stderrTail()), String.valueOf(r.exitCode()));
+                    job.fail("error.ffmpeg", tail(r.stderrText().lines().toList()), String.valueOf(r.exitCode()));
                     job.setUpdated(clock.instant());
                 }
             }
+            persist.run();
+            listener.jobChanged(job);
         } catch (IOException e) {
             LOG.log(Level.WARNING, "Job failed", e);
             finishFailed(job, "error.io", null, String.valueOf(e.getMessage()));
-            return;
+        } catch (RuntimeException e) {
+            // a broken record (e.g. hand-edited project) must not leave the job RUNNING or kill the worker
+            LOG.log(Level.SEVERE, "Unexpected job failure", e);
+            finishFailed(job, "error.internal", String.valueOf(e), e.getClass().getSimpleName());
+        } finally {
+            current = null;
+            currentToken = null;
         }
-        persist.run();
-        listener.jobChanged(job);
     }
 
     private void finishFailed(JobRecord job, String key, String detail, String... args) {

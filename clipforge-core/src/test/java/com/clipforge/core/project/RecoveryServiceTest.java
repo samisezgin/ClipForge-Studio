@@ -29,9 +29,10 @@ class RecoveryServiceTest {
     }
 
     @Test
-    void interruptedRunningJobLosesPartialOutputAndBecomesPending() throws Exception {
+    void interruptedRunningJobLosesPartFileAndBecomesPending() throws Exception {
         Path src = Files.writeString(dir.resolve("a.mp4"), "video");
-        Path out = Files.writeString(dir.resolve("out.mp4"), "partial");
+        Path out = dir.resolve("out.mp4");
+        Path part = Files.writeString(dir.resolve("out.part.mp4"), "partial");
         Project p = new Project();
         JobRecord j = job(src, out, JobState.RUNNING);
         p.getJobs().add(j);
@@ -42,16 +43,28 @@ class RecoveryServiceTest {
 
         RecoveryService.prepareResume(j, NOW);
         assertEquals(JobState.PENDING, j.getState());
-        assertFalse(Files.exists(out));
+        assertFalse(Files.exists(part));
     }
 
     @Test
-    void pausedJobKeepsExistingFileUntouched() throws Exception {
+    void finishedButUnsavedJobIsMarkedDoneNotRedone() throws Exception {
+        Path src = Files.writeString(dir.resolve("a.mp4"), "video");
+        Path out = Files.writeString(dir.resolve("out.mp4"), "complete merge");
+        JobRecord j = job(src, out, JobState.RUNNING);
+        RecoveryService.prepareResume(j, NOW);
+        assertEquals(JobState.DONE, j.getState());
+        assertTrue(Files.exists(out), "a finished output is never deleted");
+    }
+
+    @Test
+    void finalOutputIsNeverDeleted() throws Exception {
         Path src = Files.writeString(dir.resolve("a.mp4"), "video");
         Path unrelated = Files.writeString(dir.resolve("out.mp4"), "user file");
-        JobRecord j = job(src, unrelated, JobState.PAUSED);
-        RecoveryService.prepareResume(j, NOW);
-        assertTrue(Files.exists(unrelated), "only RUNNING jobs own a partial output");
+        Files.writeString(dir.resolve("out.part.mp4"), "partial");
+        for (JobState s : List.of(JobState.RUNNING, JobState.PAUSED, JobState.PENDING)) {
+            RecoveryService.prepareResume(job(src, unrelated, s), NOW);
+            assertTrue(Files.exists(unrelated), s.name());
+        }
     }
 
     @Test

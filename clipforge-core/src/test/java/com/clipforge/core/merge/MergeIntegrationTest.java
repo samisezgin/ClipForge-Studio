@@ -80,6 +80,9 @@ class MergeIntegrationTest {
             assertTrue(r.success(), r.stderrText());
         }
         assertFalse(seen.isEmpty(), "progress is reported");
+        for (MergeSpec s : specs) {
+            assertFalse(Files.exists(MergeService.partPath(Path.of(s.output()))), "part file renamed away");
+        }
 
         MediaInfo first = probe.probe(Path.of(specs.get(0).output())).orElseThrow();
         assertEquals(9.0, first.duration().toMillis() / 1000.0, 0.3);

@@ -30,6 +30,14 @@ class TimestampResolverTest {
     }
 
     @Test
+    void parsesViofoStyleNames() {
+        ParsedName n = TimestampResolver.parseName("2026_1101_233933_001F.MP4");
+        assertEquals(LocalDateTime.of(2026, 11, 1, 23, 39, 33), n.start());
+        assertEquals("F", n.channel());
+        assertEquals(1, n.sequence());
+    }
+
+    @Test
     void parsesPhoneNames() {
         assertEquals(LocalDateTime.of(2026, 11, 1, 23, 39, 33),
                 TimestampResolver.parseName("VID_20261101_233933.mp4").start());

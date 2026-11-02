@@ -57,6 +57,7 @@ public final class MainView {
     private final Consumer<Boolean> onThemeChange;
     private final BorderPane root = new BorderPane();
     private final FlowPane folderChips = new FlowPane(6, 6);
+    private final ListenerBag listeners = new ListenerBag();
 
     public MainView(AppController controller, Stage stage, HostServices host,
                     Consumer<String> onLanguageChange, Consumer<Boolean> onThemeChange) {
@@ -72,17 +73,23 @@ public final class MainView {
         return root;
     }
 
+    /** Detaches this view from the controller; call before replacing it (e.g. on language change). */
+    public void dispose() {
+        listeners.dispose();
+        stage.titleProperty().unbind();
+    }
+
     private void build() {
         VBox top = new VBox(menuBar(), toolBar(), folderBar());
         root.setTop(top);
 
-        ClipTreeView tree = new ClipTreeView(controller);
-        MergePanel merge = new MergePanel(controller, this::merge);
+        ClipTreeView tree = new ClipTreeView(controller, listeners);
+        MergePanel merge = new MergePanel(controller, listeners, this::merge);
         SplitPane split = new SplitPane(tree, merge);
         split.setDividerPositions(0.72);
         SplitPane.setResizableWithParent(merge, false);
 
-        JobsView jobs = new JobsView(controller, host);
+        JobsView jobs = new JobsView(controller, host, listeners);
         SplitPane vertical = new SplitPane(split, jobs);
         vertical.setOrientation(Orientation.VERTICAL);
         vertical.setDividerPositions(0.7);
@@ -93,7 +100,7 @@ public final class MainView {
             Path f = controller.projectFileProperty().get();
             String name = controller.untitledProperty().get() || f == null
                     ? Messages.get("project.untitled") : f.getFileName().toString();
-            return name + " — " + ClipForge.NAME;
+            return Messages.get("window.title", name, ClipForge.NAME);
         }, controller.projectFileProperty(), controller.untitledProperty()));
     }
 
@@ -186,7 +193,7 @@ public final class MainView {
     private HBox folderBar() {
         Label label = new Label(Messages.get("folders.label"));
         label.getStyleClass().add(Styles.TEXT_MUTED);
-        controller.folders().addListener((ListChangeListener<String>) c -> refreshFolders());
+        listeners.on(controller.folders(), (ListChangeListener<String>) c -> refreshFolders());
         refreshFolders();
         HBox box = new HBox(8, label, folderChips);
         box.setAlignment(Pos.CENTER_LEFT);
@@ -203,7 +210,7 @@ public final class MainView {
             folderChips.getChildren().add(hint);
         }
         for (String f : controller.folders()) {
-            Button chip = new Button(f + "  ✕");
+            Button chip = new Button(Messages.get("folders.chip", f));
             chip.getStyleClass().addAll(Styles.SMALL, Styles.BUTTON_OUTLINED);
             chip.setOnAction(e -> controller.removeFolder(f));
             chip.setTooltip(new javafx.scene.control.Tooltip(Messages.get("folders.remove")));
@@ -217,7 +224,8 @@ public final class MainView {
         Label ffmpeg = new Label();
         ffmpeg.textProperty().bind(Bindings.createStringBinding(() -> controller.toolsProperty().get() == null
                 ? Messages.get("status.noFfmpeg")
-                : "FFmpeg " + controller.toolsProperty().get().version(), controller.toolsProperty()));
+                : Messages.get("status.ffmpegVersion", controller.toolsProperty().get().version()),
+                controller.toolsProperty()));
         ffmpeg.getStyleClass().add(Styles.TEXT_MUTED);
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -257,30 +265,56 @@ public final class MainView {
     }
 
     private void newProject() {
-        if (busy()) {
+        if (busy() || !confirmDiscardUntitledJobs()) {
             return;
         }
         controller.newProject();
     }
 
+    /** Paused jobs of an untitled project would be lost when switching; offer to cancel or save first. */
+    private boolean confirmDiscardUntitledJobs() {
+        if (!controller.switchingLosesJobs()) {
+            return true;
+        }
+        Alert a = new Alert(Alert.AlertType.WARNING);
+        a.initOwner(stage);
+        a.setTitle(Messages.get("switch.title"));
+        a.setHeaderText(Messages.get("switch.header"));
+        a.setContentText(Messages.get("switch.text"));
+        ButtonType saveFirst = new ButtonType(Messages.get("menu.file.saveAs"), ButtonBar.ButtonData.OK_DONE);
+        ButtonType discard = new ButtonType(Messages.get("switch.discard"), ButtonBar.ButtonData.OTHER);
+        ButtonType cancel = new ButtonType(Messages.get("common.cancel"), ButtonBar.ButtonData.CANCEL_CLOSE);
+        a.getButtonTypes().setAll(saveFirst, discard, cancel);
+        ButtonType choice = a.showAndWait().orElse(cancel);
+        if (choice == saveFirst) {
+            saveAs();
+            return !controller.untitledProperty().get();
+        }
+        return choice == discard;
+    }
+
     private void openProject() {
-        if (busy()) {
+        if (busy() || !confirmDiscardUntitledJobs()) {
             return;
         }
         FileChooser fc = projectChooser();
         File f = fc.showOpenDialog(stage);
         if (f != null) {
-            openFile(f.toPath());
+            load(f.toPath());
         }
     }
 
+    /** Opens a recent project. */
     private void openFile(Path file) {
-        if (busy()) {
+        if (busy() || !confirmDiscardUntitledJobs()) {
             return;
         }
+        load(file);
+    }
+
+    private void load(Path file) {
         try {
             showRecovery(controller.open(file));
-
         } catch (IOException e) {
             error(Messages.get("menu.file.open"), Messages.get("status.openFailed", file.getFileName(), e.getMessage()));
         }

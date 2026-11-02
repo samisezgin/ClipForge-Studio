@@ -49,11 +49,27 @@ public final class ProjectStore {
             ch.write(java.nio.ByteBuffer.wrap(bytes));
             ch.force(true);
         }
-        try {
-            Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+        // antivirus, indexers or sync clients can briefly lock the target on Windows: retry a few times
+        IOException last = null;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try {
+                try {
+                    Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+                return;
+            } catch (IOException e) {
+                last = e;
+                try {
+                    Thread.sleep(100L * (attempt + 1));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
         }
+        throw last;
     }
 
     /** Adds the {@code .cfproj} extension if missing. */

@@ -2,13 +2,12 @@ package com.clipforge.core.ffmpeg;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 /**
@@ -100,22 +99,16 @@ public final class FfmpegLocator {
 
     private static String readVersion(Path ffmpeg) {
         try {
-            Process p = new ProcessBuilder(ffmpeg.toString(), "-hide_banner", "-version")
-                    .redirectErrorStream(true).start();
-            p.getOutputStream().close();
-            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            if (!p.waitFor(10, TimeUnit.SECONDS)) {
-                p.destroyForcibly();
+            ProcessCapture.Output out = ProcessCapture.run(List.of(ffmpeg.toString(), "-hide_banner", "-version"),
+                    Duration.ofSeconds(10));
+            if (out.exitCode() != 0) {
                 return null;
             }
-            String first = out.lines().findFirst().orElse("");
+            String first = out.stdout().lines().findFirst().orElse("");
             // "ffmpeg version 9.0-full_build-www.gyan.dev Copyright ..."
             String[] parts = first.split("\\s+");
             return parts.length >= 3 && parts[0].equals("ffmpeg") ? parts[2] : null;
         } catch (IOException e) {
-            return null;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
             return null;
         }
     }

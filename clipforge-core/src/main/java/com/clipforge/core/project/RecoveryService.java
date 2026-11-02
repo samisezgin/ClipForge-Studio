@@ -1,5 +1,7 @@
 package com.clipforge.core.project;
 
+import com.clipforge.core.util.OutputNaming;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,16 +47,28 @@ public final class RecoveryService {
     }
 
     /**
-     * Makes an unfinished job runnable again: removes a partial output left by an interrupted run and sets the
-     * state to {@link JobState#PENDING}. The output is only deleted for jobs that were running, because the merge
-     * never overwrites existing files, so any file at that path was written by this job.
+     * Makes an unfinished job runnable again and sets it to {@link JobState#PENDING}.
+     * <p>
+     * Only the job's own temporary {@code .part} file is deleted. If the final output exists while no {@code .part}
+     * is left, the merge had completed (the rename is its last step) and only the DONE state was not saved: the job
+     * is marked {@link JobState#DONE} instead of being redone. The final output is never deleted.
+     *
+     * @throws IOException if the partial file cannot be deleted (e.g. an orphaned FFmpeg still holds it open)
      */
     public static void prepareResume(JobRecord job, Instant now) throws IOException {
         if (!job.getState().unfinished()) {
             return;
         }
-        if (job.getState() == JobState.RUNNING && job.output() != null) {
-            Files.deleteIfExists(Path.of(job.output()));
+        if (job.output() != null) {
+            Path out = Path.of(job.output());
+            Path part = OutputNaming.partOf(out);
+            if (job.getState() == JobState.RUNNING && Files.isRegularFile(out) && !Files.exists(part)) {
+                job.clearError();
+                job.setState(JobState.DONE);
+                job.setUpdated(now);
+                return;
+            }
+            Files.deleteIfExists(part);
         }
         job.clearError();
         job.setState(JobState.PENDING);

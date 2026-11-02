@@ -27,9 +27,7 @@ public final class DiskCheck {
 
         /** {@code true} if the file system cannot store a file as large as {@code largestFile}. */
         public boolean exceedsFileSizeLimit() {
-            return fileSystem != null && fileSystem.toUpperCase(Locale.ROOT).startsWith("FAT")
-                    && !fileSystem.toUpperCase(Locale.ROOT).contains("EX")
-                    && largestFile > FAT32_MAX_FILE;
+            return isFat(fileSystem) && largestFile > FAT32_MAX_FILE;
         }
 
         public boolean ok() {
@@ -40,13 +38,29 @@ public final class DiskCheck {
     private DiskCheck() {
     }
 
+    /** FAT12/16/32 (Windows "FAT32", Linux "vfat"/"msdos"), but not exFAT. */
+    static boolean isFat(String type) {
+        if (type == null) {
+            return false;
+        }
+        String t = type.toLowerCase(Locale.ROOT);
+        return t.matches("v?fat\\d*") || t.equals("msdos");
+    }
+
     /**
      * @param outputDir      existing directory the output will be written to
      * @param estimatedBytes estimated total output size (before margin)
      * @param largestFile    largest single output file
      */
     public static Result check(Path outputDir, long estimatedBytes, long largestFile) throws IOException {
-        FileStore store = Files.getFileStore(outputDir);
+        Path existing = outputDir.toAbsolutePath();
+        while (existing != null && !Files.exists(existing)) {
+            existing = existing.getParent(); // the folder may not be created yet
+        }
+        if (existing == null) {
+            throw new IOException("No existing parent for " + outputDir);
+        }
+        FileStore store = Files.getFileStore(existing);
         long required = (long) Math.ceil(estimatedBytes * MARGIN);
         return new Result(store.getUsableSpace(), required, store.type(), largestFile);
     }

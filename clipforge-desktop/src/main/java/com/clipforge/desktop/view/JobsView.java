@@ -33,7 +33,7 @@ public final class JobsView extends VBox {
     private final HostServices host;
     private final ListView<JobRecord> list = new ListView<>();
 
-    public JobsView(AppController controller, HostServices host) {
+    public JobsView(AppController controller, HostServices host, ListenerBag listeners) {
         this.controller = controller;
         this.host = host;
         setSpacing(6);
@@ -72,7 +72,14 @@ public final class JobsView extends VBox {
         list.setPrefHeight(170);
         VBox.setVgrow(list, Priority.ALWAYS);
 
-        controller.progress().addListener((MapChangeListener<String, Progress>) c -> list.refresh());
+        // progress arrives several times per second: refresh the list at most ~4 times per second
+        javafx.animation.PauseTransition throttle = new javafx.animation.PauseTransition(javafx.util.Duration.millis(250));
+        throttle.setOnFinished(e -> list.refresh());
+        listeners.on(controller.progress(), (MapChangeListener<String, Progress>) c -> {
+            if (throttle.getStatus() != javafx.animation.Animation.Status.RUNNING) {
+                throttle.playFromStart();
+            }
+        });
         getChildren().addAll(header, list);
     }
 
@@ -107,6 +114,7 @@ public final class JobsView extends VBox {
             }
             Path out = Path.of(job.output());
             name.setText(out.getFileName().toString());
+            setTooltip(null);
             JobState s = job.getState();
             state.setText(Messages.get("jobs.state." + s.name().toLowerCase()));
             state.getStyleClass().removeAll(Styles.SUCCESS, Styles.DANGER, Styles.WARNING, Styles.ACCENT);
@@ -129,7 +137,7 @@ public final class JobsView extends VBox {
                     bar.setProgress(p == null || p.fraction() < 0 ? ProgressBar.INDETERMINATE_PROGRESS : p.fraction());
                     detail.setText(p == null ? Messages.get("jobs.detail.starting")
                             : Messages.get("jobs.detail.running", Formats.duration(p.processed()),
-                            Formats.duration(total), String.format("%.1f", p.speed()),
+                            Formats.duration(total), p.speed(),
                             Formats.duration(p.eta()), Formats.size(p.outputBytes())));
                 }
                 case FAILED -> {
@@ -152,7 +160,11 @@ public final class JobsView extends VBox {
             cancel.setOnAction(e -> controller.cancelJob(job));
             open.setVisible(s == JobState.DONE);
             open.setManaged(s == JobState.DONE);
-            open.setOnAction(e -> host.showDocument(out.toAbsolutePath().getParent().toUri().toString()));
+            open.setOnAction(e -> {
+                if (host != null) {
+                    host.showDocument(out.toAbsolutePath().getParent().toUri().toString());
+                }
+            });
             setGraphic(box);
         }
 

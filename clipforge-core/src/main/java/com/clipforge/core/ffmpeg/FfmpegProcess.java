@@ -38,6 +38,9 @@ public final class FfmpegProcess {
         cmd.addAll(command.subList(1, command.size()));
         LOG.fine(() -> "Running: " + String.join(" ", cmd));
 
+        if (token != null && token.isCancelled()) {
+            return new FfmpegResult(-1, true, List.of()); // never start work that was already cancelled
+        }
         Process p = new ProcessBuilder(cmd).start();
         if (token != null) {
             token.attach(p);
@@ -52,7 +55,8 @@ public final class FfmpegProcess {
             synchronized (tail) {
                 lines = List.copyOf(tail);
             }
-            return new FfmpegResult(exit, token != null && token.isCancelled(), lines);
+            // a cancel that arrives after a successful exit does not invalidate the finished output
+            return new FfmpegResult(exit, token != null && token.isCancelled() && exit != 0, lines);
         } catch (InterruptedException e) {
             p.destroyForcibly();
             Thread.currentThread().interrupt();
@@ -60,6 +64,10 @@ public final class FfmpegProcess {
         } finally {
             if (token != null) {
                 token.detach();
+            }
+            if (p.isAlive()) {
+                // reading progress failed (or a listener threw): never leave an orphaned ffmpeg behind
+                p.destroyForcibly();
             }
         }
     }
@@ -84,8 +92,12 @@ public final class FfmpegProcess {
                     case "progress" -> {
                         if (listener != null) {
                             // out_time_ms is (historically) also in microseconds
-                            listener.accept(new Progress(Duration.ofNanos(Math.max(0, outTimeUs) * 1000), total,
-                                    speed, size));
+                            try {
+                                listener.accept(new Progress(Duration.ofNanos(Math.max(0, outTimeUs) * 1000), total,
+                                        speed, size));
+                            } catch (RuntimeException e) {
+                                LOG.warning("Progress listener failed: " + e);
+                            }
                         }
                     }
                     default -> {

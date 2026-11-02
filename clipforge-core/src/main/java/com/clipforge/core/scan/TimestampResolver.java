@@ -23,9 +23,13 @@ public final class TimestampResolver {
     }
 
     private static final List<NamePattern> PATTERNS = List.of(
-            // Dash cams (Novatek / SigmaStar / Viofo style): NO20261101-233933-004116F, EV20261101_120000_000012R
+            // Dash cams (Novatek / SigmaStar style): NO20261101-233933-004116F, EV20261101_120000_000012R
             new NamePattern(Pattern.compile("^[A-Za-z]{0,4}(\\d{8})[-_](\\d{6})(?:[-_](\\d+))?([A-Za-z])?$"),
                     m -> new ParsedName(dateTime(m.group(1), m.group(2)), upper(m.group(4)), seq(m.group(3)))),
+            // Viofo / Thinkware style: 2026_1101_233933_001F
+            new NamePattern(Pattern.compile("^(\\d{4})_(\\d{4})_(\\d{6})(?:_(\\d+))?([A-Za-z])?$"),
+                    m -> new ParsedName(dateTime(m.group(1) + m.group(2), m.group(3)), upper(m.group(5)),
+                            seq(m.group(4)))),
             // Phones: VID_20261101_233933, PXL_20261101_233933123, IMG_20261101_233933
             new NamePattern(Pattern.compile("^(?:VID|PXL|IMG|MVIMG|video)[-_](\\d{8})[-_](\\d{6})\\d*(?:[-_~].*)?$",
                     Pattern.CASE_INSENSITIVE),

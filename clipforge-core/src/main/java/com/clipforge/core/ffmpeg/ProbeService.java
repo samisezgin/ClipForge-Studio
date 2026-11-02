@@ -5,20 +5,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 /** Reads {@link MediaInfo} with {@code ffprobe -print_format json}. */
 public final class ProbeService {
 
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final long TIMEOUT_SECONDS = 30;
+    private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
     private final FfmpegTools tools;
 
@@ -29,35 +27,12 @@ public final class ProbeService {
     /** @return media info, or empty if ffprobe cannot read the file (missing moov, not a media file, ...) */
     public Optional<MediaInfo> probe(Path file) {
         try {
-            Process p = new ProcessBuilder(tools.ffprobe().toString(),
-                    "-v", "error", "-print_format", "json", "-show_format", "-show_streams", file.toString())
-                    .start();
-            p.getOutputStream().close();
-            // drain stderr concurrently so a chatty error output can never block the process
-            CompletableFuture<byte[]> err = CompletableFuture.supplyAsync(() -> readQuietly(p));
-            byte[] out = p.getInputStream().readAllBytes();
-            if (!p.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                p.destroyForcibly();
-                return Optional.empty();
-            }
-            err.join();
-            if (p.exitValue() != 0) {
-                return Optional.empty();
-            }
-            return parse(new String(out, StandardCharsets.UTF_8));
+            ProcessCapture.Output out = ProcessCapture.run(List.of(tools.ffprobe().toString(),
+                    "-v", "error", "-print_format", "json", "-show_format", "-show_streams", file.toString()),
+                    TIMEOUT);
+            return out.exitCode() != 0 ? Optional.empty() : parse(out.stdout());
         } catch (IOException e) {
             return Optional.empty();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return Optional.empty();
-        }
-    }
-
-    private static byte[] readQuietly(Process p) {
-        try {
-            return p.getErrorStream().readAllBytes();
-        } catch (IOException e) {
-            return new byte[0];
         }
     }
 

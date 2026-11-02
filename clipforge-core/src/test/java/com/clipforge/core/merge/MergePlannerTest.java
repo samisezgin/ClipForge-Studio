@@ -71,6 +71,27 @@ class MergePlannerTest {
     }
 
     @Test
+    void allInOneNeverInterleavesChannels() throws Exception {
+        List<Clip> two = List.of(
+                clip("f1.mp4", t(1, 10, 0), TWO_MIN, "F"), clip("r1.mp4", t(1, 10, 0), TWO_MIN, "R"),
+                clip("f2.mp4", t(1, 10, 2), TWO_MIN, "F"), clip("r2.mp4", t(1, 10, 2), TWO_MIN, "R"));
+        List<Session> s = new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(two);
+        Set<Path> sel = two.stream().map(Clip::path).collect(Collectors.toSet());
+        List<MergeSpec> specs = MergePlanner.plan(s, sel, MergeMode.ALL_IN_ONE, out, MergeOptions.DEFAULT);
+        assertEquals(2, specs.size());
+        assertTrue(specs.get(0).inputs().stream().allMatch(i -> i.contains("f")));
+        assertTrue(specs.get(1).inputs().stream().allMatch(i -> i.contains("r")));
+    }
+
+    @Test
+    void reservedOutputsOfQueuedJobsAreNotReused() throws Exception {
+        Path queued = out.resolve("20261101_0924-0926_F_merged.mp4");
+        List<MergeSpec> specs = MergePlanner.plan(sessions, all, MergeMode.PER_SESSION, out, MergeOptions.DEFAULT,
+                List.of(queued));
+        assertTrue(specs.getFirst().output().endsWith("_merged (2).mp4"));
+    }
+
+    @Test
     void mixedFormatsInOneFileAreRejected() {
         List<Clip> mixed = List.of(
                 clip("a.mp4", t(1, 10, 0), TWO_MIN, null, "hevc", 2304, 1296),

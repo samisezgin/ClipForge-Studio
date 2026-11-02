@@ -31,12 +31,29 @@ public final class AppSettings {
         return override != null ? Path.of(override) : Path.of(System.getProperty("user.home"), ".clipforge");
     }
 
-    /** Folders searched for extra {@code messages_*.properties} files. */
+    /**
+     * Folders searched for extra {@code messages_*.properties} files: {@code lang/} next to the application
+     * (not the current working directory) and {@code ~/.clipforge/lang}.
+     */
     public static List<Path> languageDirs() {
         List<Path> dirs = new ArrayList<>();
-        dirs.add(Path.of(System.getProperty("user.dir"), "lang"));
+        appDir().ifPresent(d -> dirs.add(d.resolve("lang")));
         dirs.add(homeDir().resolve("lang"));
         return dirs;
+    }
+
+    /** Directory containing the application jar (or the classes folder when run from sources). */
+    static java.util.Optional<Path> appDir() {
+        try {
+            var src = AppSettings.class.getProtectionDomain().getCodeSource();
+            if (src == null) {
+                return java.util.Optional.empty();
+            }
+            Path p = Path.of(src.getLocation().toURI());
+            return java.util.Optional.ofNullable(p.getParent());
+        } catch (Exception e) {
+            return java.util.Optional.empty();
+        }
     }
 
     public String language() {
@@ -82,6 +99,13 @@ public final class AppSettings {
     public List<String> recentProjects() {
         String v = prefs.get("recentProjects", "");
         return v.isEmpty() ? List.of() : Arrays.asList(v.split(SEP));
+    }
+
+    public void removeRecentProject(String file) {
+        List<String> list = new ArrayList<>(recentProjects());
+        if (list.remove(file)) {
+            prefs.put("recentProjects", String.join(SEP, list));
+        }
     }
 
     public void addRecentProject(String file) {

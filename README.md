@@ -12,13 +12,13 @@ All heavy lifting is done by [FFmpeg](https://ffmpeg.org); ClipForge is the work
 ## Requirements
 
 - JDK 26
-- FFmpeg 7+ (`ffmpeg` and `ffprobe` on `PATH`, or configured in the app)
+- FFmpeg (tested with 9.0; `ffmpeg` and `ffprobe` on `PATH` or chosen under *Tools ▸ FFmpeg location*)
 - Optional: NVIDIA GPU with NVENC for hardware encoding
 
 ## Build & run
 
 ```sh
-./mvnw package                                 # build + tests
+./mvnw verify                                  # build + tests
 ./mvnw -pl clipforge-desktop javafx:run        # start the desktop app
 ```
 
