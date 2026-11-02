@@ -4,9 +4,13 @@ import com.clipforge.core.merge.IncompatibleClipsException;
 import com.clipforge.core.merge.MergePlanner;
 import com.clipforge.core.model.Clip;
 import com.clipforge.core.model.MediaInfo;
+import com.clipforge.core.scan.TimestampResolver;
 import com.clipforge.core.util.OutputNaming;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.ZoneId;
 import java.util.Collection;
 import java.util.List;
 
@@ -36,12 +40,12 @@ public final class CompressPlanner {
 
     private static long recordingStart(Path file, MediaInfo media) {
         try {
-            java.time.ZoneId zone = java.time.ZoneId.systemDefault();
-            var resolved = new com.clipforge.core.scan.TimestampResolver(zone).resolve(
-                    com.clipforge.core.scan.TimestampResolver.parseName(file.getFileName().toString()), media,
-                    java.nio.file.Files.getLastModifiedTime(file).toInstant());
+            ZoneId zone = ZoneId.systemDefault();
+            var resolved = new TimestampResolver(zone).resolve(
+                    TimestampResolver.parseName(file.getFileName().toString()), media,
+                    Files.getLastModifiedTime(file).toInstant());
             return resolved.start().atZone(zone).toInstant().toEpochMilli();
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             return 0;
         }
     }
@@ -56,7 +60,7 @@ public final class CompressPlanner {
         String base = OutputNaming.baseName(clips, tag(options), "mp4");
         Path out = OutputNaming.unique(outputDir, base, reserved);
         return new CompressSpec(clips.stream().map(c -> CompressInput.of(c.path(), c.media(),
-                        c.start().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli())).toList(),
+                        c.start().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())).toList(),
                 out.toString(), options,
                 clips.stream().mapToLong(c -> c.duration().toMillis()).sum(),
                 clips.stream().mapToLong(Clip::size).sum(),

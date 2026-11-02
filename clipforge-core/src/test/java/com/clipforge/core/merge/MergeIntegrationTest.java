@@ -1,6 +1,8 @@
 package com.clipforge.core.merge;
 
 import com.clipforge.core.FfmpegTestSupport;
+import com.clipforge.core.audio.AudioMode;
+import com.clipforge.core.audio.MusicSettings;
 import com.clipforge.core.ffmpeg.CancellationToken;
 import com.clipforge.core.ffmpeg.FfmpegResult;
 import com.clipforge.core.ffmpeg.FfmpegTools;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -65,7 +68,7 @@ class MergeIntegrationTest {
     void scanReportsGrowingPartialResults() throws Exception {
         ClipScanner scanner = new ClipScanner(new ProbeService(tools), new TimestampResolver(ZoneId.systemDefault()),
                 Clock.systemDefaultZone());
-        List<List<Clip>> snapshots = new java.util.ArrayList<>();
+        List<List<Clip>> snapshots = new ArrayList<>();
         List<Clip> clips = scanner.scan(List.of(folder), null, snapshots::add);
         // throttled to one call per 200 ms, plus one after the last file
         assertTrue(!snapshots.isEmpty() && snapshots.size() <= 4, String.valueOf(snapshots.size()));
@@ -124,8 +127,8 @@ class MergeIntegrationTest {
     void mergeWithoutAudio() throws Exception {
         List<Session> sessions = scan();
         MergeSpec spec = MergePlanner.plan(sessions, all(sessions), MergeMode.ALL_IN_ONE, out,
-                new MergeOptions(false, com.clipforge.core.audio.AudioMode.REMOVE,
-                        com.clipforge.core.audio.MusicSettings.DEFAULT)).getFirst();
+                new MergeOptions(false, AudioMode.REMOVE,
+                        MusicSettings.DEFAULT)).getFirst();
         FfmpegResult r = new MergeService(tools).merge(spec, null, null);
         assertTrue(r.success(), r.stderrText());
         MediaInfo m = new ProbeService(tools).probe(Path.of(spec.output())).orElseThrow();
@@ -139,10 +142,10 @@ class MergeIntegrationTest {
         FfmpegTestSupport.run(List.of(tools.ffmpeg().toString(), "-v", "error", "-y", "-f", "lavfi", "-i",
                 "sine=frequency=500:duration=2.5", "-c:a", "libmp3lame", music.toString()));
         List<Session> sessions = scan();
-        var settings = new com.clipforge.core.audio.MusicSettings(List.of(music.toString()), true, 0.5, true, 2,
+        var settings = new MusicSettings(List.of(music.toString()), true, 0.5, true, 2,
                 0.8, false, 0.2);
         MergeSpec spec = MergePlanner.plan(sessions, all(sessions), MergeMode.ALL_IN_ONE, out,
-                new MergeOptions(false, com.clipforge.core.audio.AudioMode.MUSIC, settings)).getFirst();
+                new MergeOptions(false, AudioMode.MUSIC, settings)).getFirst();
         FfmpegResult r = new MergeService(tools).merge(spec, null, null);
         assertTrue(r.success(), r.stderrText());
         MediaInfo m = new ProbeService(tools).probe(Path.of(spec.output())).orElseThrow();
@@ -171,7 +174,7 @@ class MergeIntegrationTest {
         Files.writeString(Path.of(spec.output()), "user data");
         try {
             new MergeService(tools).merge(spec, null, null);
-        } catch (java.nio.file.FileAlreadyExistsException expected) {
+        } catch (FileAlreadyExistsException expected) {
             assertEquals("user data", Files.readString(Path.of(spec.output())));
             return;
         }

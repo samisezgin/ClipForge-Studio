@@ -4,10 +4,12 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -47,8 +49,8 @@ class MessagesTest {
     @Test
     void noLoneApostrophes() throws Exception {
         for (String name : List.of("/i18n/messages.properties", "/i18n/messages_tr.properties")) {
-            java.util.Properties p = new java.util.Properties();
-            try (var in = new java.io.InputStreamReader(Messages.class.getResourceAsStream(name),
+            Properties p = new Properties();
+            try (var in = new InputStreamReader(Messages.class.getResourceAsStream(name),
                     StandardCharsets.UTF_8)) {
                 p.load(in);
             }

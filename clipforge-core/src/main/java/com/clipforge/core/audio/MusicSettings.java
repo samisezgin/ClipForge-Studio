@@ -1,5 +1,8 @@
 package com.clipforge.core.audio;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 
 /**
@@ -32,15 +35,15 @@ public record MusicSettings(List<String> tracks, boolean loop, double crossfadeS
     }
 
     /** JSON: missing fields fall back to {@link #DEFAULT} (a partial object must not mean volume 0 / no loop). */
-    @com.fasterxml.jackson.annotation.JsonCreator
-    static MusicSettings fromJson(@com.fasterxml.jackson.annotation.JsonProperty("tracks") List<String> tracks,
-                                  @com.fasterxml.jackson.annotation.JsonProperty("loop") Boolean loop,
-                                  @com.fasterxml.jackson.annotation.JsonProperty("crossfadeSeconds") Double crossfade,
-                                  @com.fasterxml.jackson.annotation.JsonProperty("fadeOut") Boolean fadeOut,
-                                  @com.fasterxml.jackson.annotation.JsonProperty("fadeOutSeconds") Double fadeSeconds,
-                                  @com.fasterxml.jackson.annotation.JsonProperty("volume") Double volume,
-                                  @com.fasterxml.jackson.annotation.JsonProperty("mixOriginal") Boolean mix,
-                                  @com.fasterxml.jackson.annotation.JsonProperty("originalVolume") Double originalVolume) {
+    @JsonCreator
+    static MusicSettings fromJson(@JsonProperty("tracks") List<String> tracks,
+                                  @JsonProperty("loop") Boolean loop,
+                                  @JsonProperty("crossfadeSeconds") Double crossfade,
+                                  @JsonProperty("fadeOut") Boolean fadeOut,
+                                  @JsonProperty("fadeOutSeconds") Double fadeSeconds,
+                                  @JsonProperty("volume") Double volume,
+                                  @JsonProperty("mixOriginal") Boolean mix,
+                                  @JsonProperty("originalVolume") Double originalVolume) {
         MusicSettings d = DEFAULT;
         return new MusicSettings(tracks, loop == null ? d.loop() : loop,
                 crossfade == null ? d.crossfadeSeconds() : crossfade, fadeOut == null ? d.fadeOut() : fadeOut,

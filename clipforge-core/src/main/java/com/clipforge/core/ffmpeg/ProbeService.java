@@ -5,19 +5,21 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Optional;
+import java.util.logging.Logger;
 
 /** Reads {@link MediaInfo} with {@code ffprobe -print_format json}. */
 public final class ProbeService {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
-    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger(ProbeService.class.getName());
+    private static final Logger LOG = Logger.getLogger(ProbeService.class.getName());
 
     private final FfmpegTools tools;
 
@@ -48,7 +50,7 @@ public final class ProbeService {
     static Duration timeoutFor(Path file) {
         long gb;
         try {
-            gb = java.nio.file.Files.size(file) >> 30;
+            gb = Files.size(file) >> 30;
         } catch (IOException e) {
             gb = 0;
         }

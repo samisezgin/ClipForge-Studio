@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
@@ -131,7 +132,7 @@ public final class MergeService {
                 return r;
             }
             if (!r.success()) {
-                if (r.stderrText().toLowerCase(java.util.Locale.ROOT).contains("no space left")) {
+                if (r.stderrText().toLowerCase(Locale.ROOT).contains("no space left")) {
                     return r; // a real error, not "no original audio"
                 }
                 LOG.info("Source has no usable audio to mix under the music");
@@ -147,7 +148,7 @@ public final class MergeService {
             return;
         }
         try (var walk = Files.walk(dir)) {
-            for (Path f : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+            for (Path f : walk.sorted(Comparator.reverseOrder()).toList()) {
                 Files.deleteIfExists(f);
             }
         }

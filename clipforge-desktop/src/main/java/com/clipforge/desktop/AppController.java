@@ -1,18 +1,27 @@
 package com.clipforge.desktop;
 
 import com.clipforge.core.audio.AudioMode;
+import com.clipforge.core.audio.MusicRenderer;
+import com.clipforge.core.audio.MusicSettings;
 import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.compress.CompressPlanner;
+import com.clipforge.core.compress.CompressRecovery;
 import com.clipforge.core.compress.CompressSampler;
 import com.clipforge.core.compress.CompressSpec;
 import com.clipforge.core.compress.EncoderCapabilities;
 import com.clipforge.core.compress.EncoderProfile;
+import com.clipforge.core.compress.QualityBand;
+import com.clipforge.core.compress.SegmentedEncoder;
+import com.clipforge.core.compress.TimeOverlay;
+import com.clipforge.core.ffmpeg.CancellationToken;
 import com.clipforge.core.ffmpeg.FfmpegLocator;
 import com.clipforge.core.ffmpeg.FfmpegTools;
 import com.clipforge.core.ffmpeg.ProbeService;
 import com.clipforge.core.ffmpeg.Progress;
 import com.clipforge.core.i18n.Messages;
+import com.clipforge.core.job.JobExecutor;
 import com.clipforge.core.job.JobQueue;
+import com.clipforge.core.job.MergeExecutor;
 import com.clipforge.core.merge.IncompatibleClipsException;
 import com.clipforge.core.merge.MergeMode;
 import com.clipforge.core.merge.MergeOptions;
@@ -20,21 +29,29 @@ import com.clipforge.core.merge.MergePlanner;
 import com.clipforge.core.merge.MergeService;
 import com.clipforge.core.merge.MergeSpec;
 import com.clipforge.core.model.Clip;
+import com.clipforge.core.model.ClipStatus;
 import com.clipforge.core.model.Session;
 import com.clipforge.core.project.Fingerprint;
 import com.clipforge.core.project.JobRecord;
+import com.clipforge.core.project.JobState;
+import com.clipforge.core.project.JobType;
 import com.clipforge.core.project.Project;
 import com.clipforge.core.project.ProjectStore;
 import com.clipforge.core.project.RecoveryService;
 import com.clipforge.core.scan.ClipScanner;
 import com.clipforge.core.scan.SessionGrouper;
 import com.clipforge.core.scan.TimestampResolver;
+import com.clipforge.core.telemetry.Telemetry;
+import com.clipforge.core.telemetry.TelemetryService;
 import com.clipforge.core.util.DiskCheck;
+import com.clipforge.core.util.Formats;
+import com.clipforge.core.util.OutputNaming;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.ReadOnlyBooleanProperty;
+import javafx.beans.property.ReadOnlyStringProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.property.SimpleStringProperty;
@@ -50,12 +67,20 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 /**
  * Application state and actions, independent of the concrete widgets. All public methods must be called on the
@@ -93,12 +118,12 @@ public final class AppController {
     private final StringProperty status = new SimpleStringProperty("");
     private final ObjectProperty<FfmpegTools> tools = new SimpleObjectProperty<>();
     /** Encoder profiles that work on this machine; {@code null} while detection runs. */
-    private final ObjectProperty<java.util.Set<EncoderProfile>> encoders = new SimpleObjectProperty<>();
+    private final ObjectProperty<Set<EncoderProfile>> encoders = new SimpleObjectProperty<>();
     /** Incremented whenever the selection changes, so views can refresh summaries. */
     private final ObjectProperty<Integer> selectionVersion = new SimpleObjectProperty<>(0);
     private final ObjectProperty<Integer> pipelineVersion = new SimpleObjectProperty<>(0);
     private final ObjectProperty<Integer> projectVersion = new SimpleObjectProperty<>(0);
-    private final javafx.beans.property.SimpleStringProperty outputDirProp = new javafx.beans.property.SimpleStringProperty();
+    private final SimpleStringProperty outputDirProp = new SimpleStringProperty();
     /** Set when a job stopped because its sources changed while the app was running; the view asks the user. */
     private final ObjectProperty<List<RecoveryService.Issue>> pendingRecovery = new SimpleObjectProperty<>();
 
@@ -106,7 +131,7 @@ public final class AppController {
     private final FolderWatcher watcher = new FolderWatcher(() -> Platform.runLater(this::rescan));
     private int scanGeneration;
     private boolean rescanRequested;
-    private volatile com.clipforge.core.ffmpeg.CancellationToken sampleToken;
+    private volatile CancellationToken sampleToken;
     private final PauseTransition saveDebounce = new PauseTransition(Duration.millis(800));
 
     public AppController(AppSettings settings) {
@@ -129,12 +154,12 @@ public final class AppController {
     private void detectEncoders() {
         FfmpegTools t = tools.get();
         if (t == null) {
-            encoders.set(java.util.Set.of());
+            encoders.set(Set.of());
             return;
         }
         Thread.ofVirtual().start(() -> {
-            java.util.Set<EncoderProfile> found = EncoderCapabilities.detect(t);
-            Platform.runLater(() -> encoders.set(java.util.Set.copyOf(found)));
+            Set<EncoderProfile> found = EncoderCapabilities.detect(t);
+            Platform.runLater(() -> encoders.set(Set.copyOf(found)));
         });
     }
 
@@ -147,7 +172,7 @@ public final class AppController {
             rebuildQueue();
             // jobs the user already chose to resume (e.g. in the recovery dialog) start now that FFmpeg exists
             if (queue != null && !queue.isPaused() && project.getJobs().stream()
-                    .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PENDING)) {
+                    .anyMatch(j -> j.getState() == JobState.PENDING)) {
                 queueRunning.set(true);
                 queue.start();
             }
@@ -240,9 +265,9 @@ public final class AppController {
     private void load(Path file) throws IOException {
         Project p = ProjectStore.load(file);
         // projects from 0.2 stored "remove audio" only in the compression options
-        if (p.getAudioMode() == com.clipforge.core.audio.AudioMode.KEEP && p.getCompressOptions() != null
-                && p.getCompressOptions().audio() == com.clipforge.core.audio.AudioMode.REMOVE) {
-            p.setAudioMode(com.clipforge.core.audio.AudioMode.REMOVE);
+        if (p.getAudioMode() == AudioMode.KEEP && p.getCompressOptions() != null
+                && p.getCompressOptions().audio() == AudioMode.REMOVE) {
+            p.setAudioMode(AudioMode.REMOVE);
         }
         project = p;
         projectFile.set(file);
@@ -320,7 +345,7 @@ public final class AppController {
         sessions.clear();
         queueRunning.set(false);
         queuePaused.set(project.getJobs().stream()
-                .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PAUSED));
+                .anyMatch(j -> j.getState() == JobState.PAUSED));
         scanGeneration++; // results of a scan started for the previous project are discarded
         outputDirProp.set(project.getOutputDir());
         projectVersion.set(projectVersion.get() + 1);
@@ -338,9 +363,9 @@ public final class AppController {
             queue = null;
             return;
         }
-        java.util.Map<com.clipforge.core.project.JobType, com.clipforge.core.job.JobExecutor> executors = java.util.Map.of(
-                com.clipforge.core.project.JobType.MERGE, new com.clipforge.core.job.MergeExecutor(new MergeService(t)),
-                com.clipforge.core.project.JobType.COMPRESS, new com.clipforge.core.compress.SegmentedEncoder(t));
+        Map<JobType, JobExecutor> executors = Map.of(
+                JobType.MERGE, new MergeExecutor(new MergeService(t)),
+                JobType.COMPRESS, new SegmentedEncoder(t));
         queue = new JobQueue(project, executors, this::saveFromWorker, new JobQueue.Listener() {
             @Override
             public void jobChanged(JobRecord job) {
@@ -444,10 +469,10 @@ public final class AppController {
                 ClipScanner scanner = new ClipScanner(new ProbeService(t),
                         new TimestampResolver(ZoneId.systemDefault()), clock);
                 // partial results reach the list at most every 300 ms; only the newest snapshot is applied
-                java.util.concurrent.atomic.AtomicReference<List<Clip>> pending =
-                        new java.util.concurrent.atomic.AtomicReference<>();
-                java.util.concurrent.Executor later = java.util.concurrent.CompletableFuture
-                        .delayedExecutor(300, java.util.concurrent.TimeUnit.MILLISECONDS);
+                AtomicReference<List<Clip>> pending =
+                        new AtomicReference<>();
+                Executor later = CompletableFuture
+                        .delayedExecutor(300, TimeUnit.MILLISECONDS);
                 List<Clip> clips = scanner.scan(dirs, (done, total) ->
                         Platform.runLater(() -> setStatus("status.scanning", done, total)), part -> {
                     if (pending.getAndSet(part) == null) {
@@ -507,7 +532,7 @@ public final class AppController {
         synchronized (project) {
             unfinished = project.getJobs().stream()
                     .filter(j -> j.output() != null && j.getState().unfinished())
-                    .map(j -> Path.of(j.output())).collect(java.util.stream.Collectors.toSet());
+                    .map(j -> Path.of(j.output())).collect(Collectors.toSet());
         }
         return unfinished.isEmpty() ? scanned : scanned.stream().filter(c -> !unfinished.contains(c.path())).toList();
     }
@@ -524,7 +549,7 @@ public final class AppController {
         synchronized (project) {
             finishedOutputs = project.getJobs().stream()
                     .filter(j -> j.output() != null && !j.getState().unfinished())
-                    .map(j -> Path.of(j.output())).collect(java.util.stream.Collectors.toSet());
+                    .map(j -> Path.of(j.output())).collect(Collectors.toSet());
         }
         int copying = 0;
         for (Clip c : clips) {
@@ -538,7 +563,7 @@ public final class AppController {
             }
             if (!c.selectable()) {
                 selected.remove(c.path());
-                if (c.status() == com.clipforge.core.model.ClipStatus.COPYING) {
+                if (c.status() == ClipStatus.COPYING) {
                     copying++;
                 }
             }
@@ -682,7 +707,7 @@ public final class AppController {
         setOutputDir(last.isBlank() ? Path.of(System.getProperty("user.home"), "Videos", "ClipForge") : Path.of(last));
     }
 
-    public javafx.beans.property.ReadOnlyStringProperty outputDirProperty() {
+    public ReadOnlyStringProperty outputDirProperty() {
         return outputDirProp;
     }
 
@@ -702,15 +727,15 @@ public final class AppController {
     /** File name for {@code error.musicMissing}. */
     private String missingTrack = "";
 
-    public com.clipforge.core.audio.AudioMode audioMode() {
+    public AudioMode audioMode() {
         return project.getAudioMode();
     }
 
-    public com.clipforge.core.audio.MusicSettings music() {
+    public MusicSettings music() {
         return project.getMusic();
     }
 
-    public void setAudio(com.clipforge.core.audio.AudioMode mode, com.clipforge.core.audio.MusicSettings music) {
+    public void setAudio(AudioMode mode, MusicSettings music) {
         if (mode == project.getAudioMode() && music.equals(project.getMusic())) {
             return;
         }
@@ -723,7 +748,7 @@ public final class AppController {
 
     /** Validates the music selection; returns an i18n error key (or key|file) or {@code null}. */
     private String audioError() {
-        if (project.getAudioMode() != com.clipforge.core.audio.AudioMode.MUSIC) {
+        if (project.getAudioMode() != AudioMode.MUSIC) {
             return null;
         }
         List<String> tracks = project.getMusic().tracks();
@@ -740,7 +765,7 @@ public final class AppController {
     }
 
     /** Total length of the music playlist in seconds, measured in the background. */
-    public void measureMusic(java.util.function.Consumer<Double> result) {
+    public void measureMusic(Consumer<Double> result) {
         FfmpegTools t = tools.get();
         List<String> tracks = project.getMusic().tracks();
         if (t == null || tracks.isEmpty()) {
@@ -750,7 +775,7 @@ public final class AppController {
         Thread.ofVirtual().start(() -> {
             double total;
             try {
-                total = new com.clipforge.core.audio.MusicRenderer(t).durations(tracks).stream()
+                total = new MusicRenderer(t).durations(tracks).stream()
                         .mapToDouble(Double::doubleValue).sum();
             } catch (IOException e) {
                 total = -1;
@@ -763,8 +788,8 @@ public final class AppController {
     // ------------------------------------------------------------------ telemetry
 
     /** Reads the telemetry of the clips (joined on one timeline) in the background. */
-    public void readTelemetry(List<Clip> clips, java.util.function.Consumer<com.clipforge.core.telemetry.Telemetry> done,
-                              java.util.function.Consumer<String> failed) {
+    public void readTelemetry(List<Clip> clips, Consumer<Telemetry> done,
+                              Consumer<String> failed) {
         FfmpegTools t = tools.get();
         if (t == null) {
             failed.accept(Messages.get("error.noFfmpeg"));
@@ -774,7 +799,7 @@ public final class AppController {
         List<java.time.Duration> durations = clips.stream().map(Clip::duration).toList();
         Thread.ofVirtual().start(() -> {
             try {
-                var telemetry = new com.clipforge.core.telemetry.TelemetryService(t, ZoneId.systemDefault())
+                var telemetry = new TelemetryService(t, ZoneId.systemDefault())
                         .read(paths, durations);
                 Platform.runLater(() -> done.accept(telemetry));
             } catch (Exception e) {
@@ -785,14 +810,14 @@ public final class AppController {
 
     // ------------------------------------------------------------------ compression settings
 
-    public ObjectProperty<java.util.Set<EncoderProfile>> encodersProperty() {
+    public ObjectProperty<Set<EncoderProfile>> encodersProperty() {
         return encoders;
     }
 
     /** Saved options, or defaults for the best available encoder; {@code null} if no encoder works. */
     public CompressOptions compressOptions() {
         CompressOptions o = project.getCompressOptions();
-        java.util.Set<EncoderProfile> av = encoders.get();
+        Set<EncoderProfile> av = encoders.get();
         if (av == null) {
             return null; // still detecting: nothing may start before the encoder is verified
         }
@@ -811,7 +836,7 @@ public final class AppController {
     /** {@code true} if the project's saved encoder does not work on this machine and a default replaces it. */
     public boolean savedEncoderUnavailable() {
         CompressOptions o = project.getCompressOptions();
-        java.util.Set<EncoderProfile> av = encoders.get();
+        Set<EncoderProfile> av = encoders.get();
         return o != null && av != null && !av.contains(o.profile());
     }
 
@@ -920,7 +945,7 @@ public final class AppController {
         if (!compress) {
             EncoderProfile p = o.profile();
             // only the quality changes: the date/time stamp and the other settings still apply
-            o = new CompressOptions(p, p.range(com.clipforge.core.compress.QualityBand.TRANSPARENT)[1],
+            o = new CompressOptions(p, p.range(QualityBand.TRANSPARENT)[1],
                     o.segmentSeconds(), o.concurrency(), o.audio(), o.music(), o.overlayTime(), o.speed());
         }
         if (project.isStepSpeed()) {
@@ -945,12 +970,12 @@ public final class AppController {
      * joined and compressed in one pass), or one job for the chosen file.
      */
     /** Plans in the background (probing a 50 GB file or a slow drive must not freeze the UI). */
-    public void planCompressAsync(java.util.function.Consumer<CompressPlan> result) {
+    public void planCompressAsync(Consumer<CompressPlan> result) {
         planCompressAsync(result, false);
     }
 
     /** @param forSample the sample is video only, so the music selection is not validated */
-    public void planCompressAsync(java.util.function.Consumer<CompressPlan> result, boolean forSample) {
+    public void planCompressAsync(Consumer<CompressPlan> result, boolean forSample) {
         ensureOutputDir();
         String audioErr = forSample ? null : audioError();
         if (audioErr != null) {
@@ -1012,7 +1037,7 @@ public final class AppController {
         if (o == null) {
             return CompressPlan.error("error.noEncoder");
         }
-        if (o.overlayTime() && com.clipforge.core.compress.TimeOverlay.font().isEmpty()) {
+        if (o.overlayTime() && TimeOverlay.font().isEmpty()) {
             return CompressPlan.error("error.noFont");
         }
         String out = in.outputDir();
@@ -1039,7 +1064,7 @@ public final class AppController {
                 if (in.nothingSelected()) {
                     return CompressPlan.error("error.noSelection");
                 }
-                java.util.Map<Path, Clip> byPath = new java.util.HashMap<>();
+                Map<Path, Clip> byPath = new HashMap<>();
                 in.sessions().forEach(s -> s.clips().forEach(c -> byPath.put(c.path(), c)));
                 List<List<Clip>> groups = new ArrayList<>();
                 if (in.join()) {
@@ -1064,8 +1089,8 @@ public final class AppController {
             long input = specs.stream().mapToLong(CompressSpec::totalBytes).sum();
             DiskCheck.Result disk = DiskCheck.check(outDir, input, input / 2);
             if (!disk.enoughSpace()) {
-                return CompressPlan.error("error.diskSpace", com.clipforge.core.util.Formats.size(disk.requiredBytes()),
-                        com.clipforge.core.util.Formats.size(disk.usableBytes()));
+                return CompressPlan.error("error.diskSpace", Formats.size(disk.requiredBytes()),
+                        Formats.size(disk.usableBytes()));
             }
             if (disk.exceedsFileSizeLimit()) {
                 return CompressPlan.error("error.fat32", disk.fileSystem());
@@ -1086,7 +1111,7 @@ public final class AppController {
     }
 
     /** Fingerprints the sources in the background, then queues the jobs on the FX thread. */
-    public void startCompressAsync(List<CompressSpec> specs, java.util.function.Consumer<String> failed) {
+    public void startCompressAsync(List<CompressSpec> specs, Consumer<String> failed) {
         if (queue == null) {
             failed.accept(Messages.get("error.noFfmpeg"));
             return;
@@ -1135,15 +1160,15 @@ public final class AppController {
         }
         queueRunning.set(true);
         queuePaused.set(project.getJobs().stream()
-                .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PAUSED));
+                .anyMatch(j -> j.getState() == JobState.PAUSED));
     }
 
     /** Encodes a short sample of the first planned job in the background. */
-    public void sample(CompressSpec spec, java.util.function.Consumer<CompressSampler.Result> done,
-                       java.util.function.Consumer<String> failed) {
+    public void sample(CompressSpec spec, Consumer<CompressSampler.Result> done,
+                       Consumer<String> failed) {
         FfmpegTools t = tools.get();
         Thread.ofVirtual().start(() -> {
-            com.clipforge.core.ffmpeg.CancellationToken token = new com.clipforge.core.ffmpeg.CancellationToken();
+            CancellationToken token = new CancellationToken();
             sampleToken = token;
             try {
                 CompressSampler.Result r = new CompressSampler(t).sample(spec, 60, token);
@@ -1159,15 +1184,15 @@ public final class AppController {
     /** Deletes partial files of a merge or compression job that will not continue. */
     private static void discardFiles(JobRecord job) {
         if (job.getMerge() != null) {
-            com.clipforge.core.merge.MergeService.discard(job.getMerge());
+            MergeService.discard(job.getMerge());
         }
-        com.clipforge.core.compress.CompressRecovery.discard(job);
+        CompressRecovery.discard(job);
     }
 
-    private static List<Fingerprint> musicFingerprints(com.clipforge.core.audio.AudioMode mode,
-                                                       com.clipforge.core.audio.MusicSettings music) throws IOException {
+    private static List<Fingerprint> musicFingerprints(AudioMode mode,
+                                                       MusicSettings music) throws IOException {
         List<Fingerprint> list = new ArrayList<>();
-        if (mode == com.clipforge.core.audio.AudioMode.MUSIC) {
+        if (mode == AudioMode.MUSIC) {
             for (String t : music.tracks()) {
                 list.add(Fingerprint.of(Path.of(t)));
             }
@@ -1216,8 +1241,8 @@ public final class AppController {
             DiskCheck.Result disk = DiskCheck.check(outDir, total, largest);
             if (!disk.enoughSpace()) {
                 return MergePlan.error("error.diskSpace",
-                        com.clipforge.core.util.Formats.size(disk.requiredBytes()),
-                        com.clipforge.core.util.Formats.size(disk.usableBytes()));
+                        Formats.size(disk.requiredBytes()),
+                        Formats.size(disk.usableBytes()));
             }
             if (disk.exceedsFileSizeLimit()) {
                 return MergePlan.error("error.fat32", disk.fileSystem());
@@ -1254,7 +1279,7 @@ public final class AppController {
         }
         queueRunning.set(true);
         queuePaused.set(project.getJobs().stream()
-                .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PAUSED));
+                .anyMatch(j -> j.getState() == JobState.PAUSED));
     }
 
     public void pauseQueue() {
@@ -1307,7 +1332,7 @@ public final class AppController {
             project.getJobs().removeAll(removed);
         }
         // failed or cancelled compression jobs may still hold a growing output and segments
-        removed.stream().filter(j -> j.getState() != com.clipforge.core.project.JobState.DONE)
+        removed.stream().filter(j -> j.getState() != JobState.DONE)
                 .forEach(AppController::discardFiles);
         jobs.setAll(project.getJobs());
         progress.keySet().retainAll(project.getJobs().stream().map(JobRecord::getId).toList());
@@ -1329,15 +1354,15 @@ public final class AppController {
                         if (i.job().getCompress() != null) {
                             if (video) {
                                 // segments encoded from the old source must not be joined with new ones
-                                com.clipforge.core.compress.CompressRecovery.restart(i.job().getCompress());
+                                CompressRecovery.restart(i.job().getCompress());
                             } else {
                                 i.job().getCompress().setAudioReady(false); // only the music changed
                             }
                         }
                     }
                     RecoveryService.prepareResume(i.job(), clock.instant());
-                    if (!startNow && i.job().getState() == com.clipforge.core.project.JobState.PENDING) {
-                        i.job().setState(com.clipforge.core.project.JobState.PAUSED);
+                    if (!startNow && i.job().getState() == JobState.PENDING) {
+                        i.job().setState(JobState.PAUSED);
                     }
                 } catch (IOException e) {
                     // e.g. an orphaned FFmpeg from the crashed session still holds the partial file
@@ -1388,11 +1413,11 @@ public final class AppController {
     public void cancelJobs(List<RecoveryService.Issue> issues) {
         synchronized (project) {
             for (RecoveryService.Issue i : issues) {
-                i.job().setState(com.clipforge.core.project.JobState.CANCELLED);
+                i.job().setState(JobState.CANCELLED);
                 discardFiles(i.job());
                 if (i.job().output() != null) {
                     try {
-                        Files.deleteIfExists(com.clipforge.core.util.OutputNaming.partOf(Path.of(i.job().output())));
+                        Files.deleteIfExists(OutputNaming.partOf(Path.of(i.job().output())));
                     } catch (IOException ignored) {
                         // a leftover .part file is harmless
                     }

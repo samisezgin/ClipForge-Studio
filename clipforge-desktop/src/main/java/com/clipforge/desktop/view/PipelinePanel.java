@@ -1,6 +1,7 @@
 package com.clipforge.desktop.view;
 
 import atlantafx.base.theme.Styles;
+import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.model.Clip;
 import com.clipforge.core.util.Formats;
@@ -167,7 +168,7 @@ public final class PipelinePanel extends VBox {
             parts.add(Messages.get("pipeline.step.merge"));
         }
         if (doSpeed) {
-            parts.add(Messages.get("pipeline.step.speed", com.clipforge.core.compress.CompressOptions.formatSpeed(
+            parts.add(Messages.get("pipeline.step.speed", CompressOptions.formatSpeed(
                     controller.speedFactor())));
         }
         if (doCompress) {

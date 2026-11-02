@@ -12,6 +12,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /** Streams and container tags of a file, plus helpers to read raw data packets with ffprobe. */
@@ -78,7 +79,7 @@ public record StreamTable(List<Stream> streams, Map<String, String> formatTags) 
         Process p = new ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start();
         p.getOutputStream().close();
         // read concurrently so the timeout also applies to an ffprobe that hangs without closing stdout
-        java.util.concurrent.CompletableFuture<byte[]> reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        CompletableFuture<byte[]> reader = CompletableFuture.supplyAsync(() -> {
             try {
                 return p.getInputStream().readAllBytes();
             } catch (IOException e) {

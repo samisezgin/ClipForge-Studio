@@ -4,6 +4,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.prefs.Preferences;
 
 /** Per-user application settings (not project data), stored with {@link Preferences}. */
@@ -43,16 +44,16 @@ public final class AppSettings {
     }
 
     /** Directory containing the application jar (or the classes folder when run from sources). */
-    static java.util.Optional<Path> appDir() {
+    static Optional<Path> appDir() {
         try {
             var src = AppSettings.class.getProtectionDomain().getCodeSource();
             if (src == null) {
-                return java.util.Optional.empty();
+                return Optional.empty();
             }
             Path p = Path.of(src.getLocation().toURI());
-            return java.util.Optional.ofNullable(p.getParent());
+            return Optional.ofNullable(p.getParent());
         } catch (Exception e) {
-            return java.util.Optional.empty();
+            return Optional.empty();
         }
     }
 

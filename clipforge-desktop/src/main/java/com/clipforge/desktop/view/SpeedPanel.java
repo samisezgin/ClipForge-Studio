@@ -8,6 +8,7 @@ import com.clipforge.core.util.Formats;
 import com.clipforge.desktop.AppController;
 import javafx.geometry.Insets;
 import javafx.scene.control.Label;
+import javafx.scene.control.SpinnerValueFactory;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.VBox;
 
@@ -32,7 +33,7 @@ public final class SpeedPanel extends VBox {
         // two decimals like the stored factor (e.g. 1.1x); the box arrows still step by 0.25
         speed = new SliderBox(CompressOptions.MIN_SPEED, CompressOptions.MAX_SPEED, SLIDER_MAX, 0.01,
                 controller.speedFactor());
-        ((javafx.scene.control.SpinnerValueFactory.DoubleSpinnerValueFactory) speed.box().getValueFactory())
+        ((SpinnerValueFactory.DoubleSpinnerValueFactory) speed.box().getValueFactory())
                 .setAmountToStepBy(0.25);
         speed.slider().setBlockIncrement(0.25);
         Tooltip tip = new Tooltip(Messages.get("speed.factor.tip"));

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -88,7 +89,7 @@ class FragmentedMp4Test {
         assertEquals(14 * 3600.0, longTimes.get(120), 0.1);
 
         // simulate a crash in the middle of the last append and recover by truncation
-        Files.write(out, new byte[]{0, 0, 1, 0, 'm', 'o', 'o', 'f', 1, 2, 3}, java.nio.file.StandardOpenOption.APPEND);
+        Files.write(out, new byte[]{0, 0, 1, 0, 'm', 'o', 'o', 'f', 1, 2, 3}, StandardOpenOption.APPEND);
         FragmentedMp4.Info damaged = FragmentedMp4.inspect(out);
         assertEquals(300, damaged.samples(), "incomplete trailing box is ignored");
         FragmentedMp4.truncate(out, FragmentedMp4.lastCompleteFragmentEnd(damaged));

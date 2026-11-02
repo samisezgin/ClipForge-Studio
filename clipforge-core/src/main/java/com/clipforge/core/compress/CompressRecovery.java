@@ -1,6 +1,8 @@
 package com.clipforge.core.compress;
 
 import com.clipforge.core.mp4.FragmentedMp4;
+import com.clipforge.core.mp4.Mp4Reader;
+import com.clipforge.core.project.JobRecord;
 import com.clipforge.core.util.OutputNaming;
 
 import java.io.IOException;
@@ -171,7 +173,7 @@ public final class CompressRecovery {
             FragmentedMp4.Info info = FragmentedMp4.inspect(temp);
             long ms = info.durationTicks() * 1000 / Math.max(1, info.timescale());
             // the file must end on a box boundary (FFmpeg may add an mfra index after the last fragment)
-            return info.samples() > 0 && !com.clipforge.core.mp4.Mp4Reader.scan(temp).truncated()
+            return info.samples() > 0 && !Mp4Reader.scan(temp).truncated()
                     && Math.abs(ms - Math.round(s.durationMs() / speed)) <= DURATION_TOLERANCE_MS;
         } catch (IOException e) {
             return false;
@@ -191,7 +193,7 @@ public final class CompressRecovery {
     }
 
     /** Deletes the job's partial files of any job state: used when a compression job is cancelled or removed. */
-    public static void discard(com.clipforge.core.project.JobRecord job) {
+    public static void discard(JobRecord job) {
         if (job.getCompress() == null || job.getCompress().getSpec() == null) {
             return;
         }

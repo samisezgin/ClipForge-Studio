@@ -2,6 +2,7 @@ package com.clipforge.desktop.view;
 
 import atlantafx.base.theme.Styles;
 import com.clipforge.core.audio.AudioMode;
+import com.clipforge.core.audio.MusicSettings;
 import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.compress.CompressSampler;
 import com.clipforge.core.compress.EncoderProfile;
@@ -11,6 +12,7 @@ import com.clipforge.core.util.Formats;
 import com.clipforge.desktop.AppController;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
+import javafx.scene.Cursor;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
@@ -89,7 +91,7 @@ public final class CompressPanel extends VBox {
             l.setMaxWidth(Double.MAX_VALUE);
             // a preset: clicking a range selects its lowest value (the best quality within it)
             QualityBand band = QualityBand.values()[i];
-            l.setCursor(javafx.scene.Cursor.HAND);
+            l.setCursor(Cursor.HAND);
             l.setOnMouseClicked(e -> {
                 EncoderProfile p = encoder.getValue();
                 if (p != null) {
@@ -213,7 +215,7 @@ public final class CompressPanel extends VBox {
         // audio comes from the shared audio panel and the speed from the speed tab when the job is planned
         controller.setCompressOptions(new CompressOptions(encoder.getValue(), (int) Math.round(quality.getValue()),
                 segment.getValue() == null ? 0 : segment.getValue(), parallel.getValue(),
-                AudioMode.KEEP, com.clipforge.core.audio.MusicSettings.DEFAULT, overlay.isSelected()));
+                AudioMode.KEEP, MusicSettings.DEFAULT, overlay.isSelected()));
         sampleResult.setText("");
     }
 

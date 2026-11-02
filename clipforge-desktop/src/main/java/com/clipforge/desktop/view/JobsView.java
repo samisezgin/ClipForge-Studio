@@ -1,15 +1,17 @@
 package com.clipforge.desktop.view;
 
 import atlantafx.base.theme.Styles;
+import com.clipforge.core.compress.CompressState;
 import com.clipforge.core.ffmpeg.Progress;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.project.JobRecord;
-import com.clipforge.core.compress.CompressState;
 import com.clipforge.core.project.JobState;
 import com.clipforge.core.project.JobType;
-import com.clipforge.core.util.OutputNaming;
 import com.clipforge.core.util.Formats;
+import com.clipforge.core.util.OutputNaming;
 import com.clipforge.desktop.AppController;
+import javafx.animation.Animation;
+import javafx.animation.PauseTransition;
 import javafx.application.HostServices;
 import javafx.collections.MapChangeListener;
 import javafx.geometry.Insets;
@@ -76,10 +78,10 @@ public final class JobsView extends VBox {
         VBox.setVgrow(list, Priority.ALWAYS);
 
         // progress arrives several times per second: refresh the list at most ~4 times per second
-        javafx.animation.PauseTransition throttle = new javafx.animation.PauseTransition(javafx.util.Duration.millis(250));
+        PauseTransition throttle = new PauseTransition(javafx.util.Duration.millis(250));
         throttle.setOnFinished(e -> list.refresh());
         listeners.on(controller.progress(), (MapChangeListener<String, Progress>) c -> {
-            if (throttle.getStatus() != javafx.animation.Animation.Status.RUNNING) {
+            if (throttle.getStatus() != Animation.Status.RUNNING) {
                 throttle.playFromStart();
             }
         });

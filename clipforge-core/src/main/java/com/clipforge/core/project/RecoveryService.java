@@ -1,5 +1,6 @@
 package com.clipforge.core.project;
 
+import com.clipforge.core.merge.MergeService;
 import com.clipforge.core.util.OutputNaming;
 
 import java.io.IOException;
@@ -8,6 +9,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * Inspects a loaded project for interrupted work and prepares it for resumption.
@@ -35,7 +37,7 @@ public final class RecoveryService {
         List<Issue> issues = new ArrayList<>();
         for (JobRecord job : project.getJobs()) {
             if (job.getState().unfinished()) {
-                List<String> changed = java.util.stream.Stream.concat(job.getSources().stream(),
+                List<String> changed = Stream.concat(job.getSources().stream(),
                                 job.getMusicSources().stream())
                         .filter(f -> !f.matchesDisk()).map(Fingerprint::path).toList();
                 issues.add(new Issue(job, changed.isEmpty() ? Kind.INTERRUPTED : Kind.SOURCE_CHANGED, changed));
@@ -77,7 +79,7 @@ public final class RecoveryService {
                 return;
             }
             Files.deleteIfExists(part);
-            com.clipforge.core.merge.MergeService.discard(job.getMerge()); // also intermediate music files
+            MergeService.discard(job.getMerge()); // also intermediate music files
         }
         job.clearError();
         job.setState(JobState.PENDING);
@@ -94,7 +96,7 @@ public final class RecoveryService {
         List<Fingerprint> music = new ArrayList<>();
         for (Fingerprint f : job.getMusicSources()) {
             // a deleted track is left as it is: the job then reports which music file is missing
-            music.add(java.nio.file.Files.isRegularFile(Path.of(f.path())) ? Fingerprint.of(Path.of(f.path())) : f);
+            music.add(Files.isRegularFile(Path.of(f.path())) ? Fingerprint.of(Path.of(f.path())) : f);
         }
         job.setMusicSources(music);
     }

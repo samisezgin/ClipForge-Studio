@@ -1,14 +1,20 @@
 package com.clipforge.desktop;
 
 import atlantafx.base.theme.PrimerDark;
+import com.clipforge.core.audio.AudioMode;
+import com.clipforge.core.audio.MusicSettings;
+import com.clipforge.core.compress.QualityBand;
 import com.clipforge.core.ffmpeg.FfmpegLocator;
 import com.clipforge.core.ffmpeg.FfmpegTools;
+import com.clipforge.core.ffmpeg.ProbeService;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.project.JobState;
 import com.clipforge.desktop.view.MainView;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Scene;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.TabPane;
 import javafx.scene.image.WritableImage;
 import javafx.stage.Stage;
 import org.junit.jupiter.api.AfterAll;
@@ -16,6 +22,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,6 +37,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.prefs.Preferences;
+import java.util.zip.CRC32;
+import java.util.zip.DeflaterOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -125,8 +136,8 @@ class DesktopSmokeTest {
             mp.getInputStream().readAllBytes();
             assertEquals(0, mp.waitFor());
             onFx(() -> {
-                controller.setAudio(com.clipforge.core.audio.AudioMode.MUSIC,
-                        com.clipforge.core.audio.MusicSettings.DEFAULT.withTracks(List.of(tune.toString())));
+                controller.setAudio(AudioMode.MUSIC,
+                        MusicSettings.DEFAULT.withTracks(List.of(tune.toString())));
                 // the audio panel reads the project on load; rebuild the view to show the music settings
                 return null;
             });
@@ -145,7 +156,7 @@ class DesktopSmokeTest {
             }
             try (var files = Files.list(outDir)) {
                 for (Path f : files.filter(x -> x.getFileName().toString().contains("_av1")).toList()) {
-                    var m = new com.clipforge.core.ffmpeg.ProbeService(tools.get()).probe(f).orElseThrow();
+                    var m = new ProbeService(tools.get()).probe(f).orElseThrow();
                     assertEquals("aac", m.audioCodec(), "background music in " + f.getFileName());
                 }
             }
@@ -160,7 +171,7 @@ class DesktopSmokeTest {
                 for (var s : speedOnly.specs()) {
                     var o = s.options();
                     assertEquals(3, o.speed());
-                    assertEquals(o.profile().range(com.clipforge.core.compress.QualityBand.TRANSPARENT)[1], o.quality());
+                    assertEquals(o.profile().range(QualityBand.TRANSPARENT)[1], o.quality());
                     assertTrue(s.output().endsWith("_3x.mp4"), s.output());
                 }
                 // all steps: joined per session, sped up and compressed with the compress tab's quality
@@ -180,7 +191,7 @@ class DesktopSmokeTest {
             stageRef[0] = musicStage;
             snapshot(stageRef[0], OUT.resolve("ui-steps-en.png")); // steps panel at the top of the side panel
             onFx(() -> {
-                var tabs = (javafx.scene.control.TabPane) stageRef[0].getScene().lookup(".tab-pane");
+                var tabs = (TabPane) stageRef[0].getScene().lookup(".tab-pane");
                 tabs.getSelectionModel().select(1); // speed up
                 sideScroll(stageRef[0]).setVvalue(1);
                 return null;
@@ -188,7 +199,7 @@ class DesktopSmokeTest {
             Thread.sleep(300);
             snapshot(stageRef[0], OUT.resolve("ui-speed-en.png"));
             onFx(() -> {
-                var tabs = (javafx.scene.control.TabPane) stageRef[0].getScene().lookup(".tab-pane");
+                var tabs = (TabPane) stageRef[0].getScene().lookup(".tab-pane");
                 tabs.getSelectionModel().select(2); // compress
                 sideScroll(stageRef[0]).setVvalue(1);
                 return null;
@@ -226,10 +237,10 @@ class DesktopSmokeTest {
         return s;
     }
 
-    private static javafx.scene.control.ScrollPane sideScroll(Stage stage) {
+    private static ScrollPane sideScroll(Stage stage) {
         return stage.getScene().getRoot().lookupAll(".scroll-pane").stream()
                 .filter(n -> n.getStyleClass().contains("side-panel"))
-                .map(n -> (javafx.scene.control.ScrollPane) n).findFirst().orElseThrow();
+                .map(n -> (ScrollPane) n).findFirst().orElseThrow();
     }
 
     private static void snapshot(Stage stage, Path file) throws Exception {
@@ -241,11 +252,11 @@ class DesktopSmokeTest {
     }
 
     /** Minimal PNG encoder (RGB, no filtering) so the test does not need javafx.swing / java.desktop. */
-    private static byte[] png(WritableImage img) throws java.io.IOException {
+    private static byte[] png(WritableImage img) throws IOException {
         int w = (int) img.getWidth();
         int h = (int) img.getHeight();
         var reader = img.getPixelReader();
-        var raw = new java.io.ByteArrayOutputStream();
+        var raw = new ByteArrayOutputStream();
         for (int y = 0; y < h; y++) {
             raw.write(0);
             for (int x = 0; x < w; x++) {
@@ -255,13 +266,13 @@ class DesktopSmokeTest {
                 raw.write(argb & 0xff);
             }
         }
-        var out = new java.io.ByteArrayOutputStream();
+        var out = new ByteArrayOutputStream();
         out.write(new byte[]{(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'});
-        var ihdr = java.nio.ByteBuffer.allocate(13).putInt(w).putInt(h).put((byte) 8).put((byte) 2)
+        var ihdr = ByteBuffer.allocate(13).putInt(w).putInt(h).put((byte) 8).put((byte) 2)
                 .put((byte) 0).put((byte) 0).put((byte) 0).array();
         chunk(out, "IHDR", ihdr);
-        var z = new java.io.ByteArrayOutputStream();
-        try (var d = new java.util.zip.DeflaterOutputStream(z)) {
+        var z = new ByteArrayOutputStream();
+        try (var d = new DeflaterOutputStream(z)) {
             raw.writeTo(d);
         }
         chunk(out, "IDAT", z.toByteArray());
@@ -269,15 +280,15 @@ class DesktopSmokeTest {
         return out.toByteArray();
     }
 
-    private static void chunk(java.io.ByteArrayOutputStream out, String type, byte[] data) throws java.io.IOException {
-        out.write(java.nio.ByteBuffer.allocate(4).putInt(data.length).array());
+    private static void chunk(ByteArrayOutputStream out, String type, byte[] data) throws IOException {
+        out.write(ByteBuffer.allocate(4).putInt(data.length).array());
         byte[] t = type.getBytes(StandardCharsets.US_ASCII);
         out.write(t);
         out.write(data);
-        var crc = new java.util.zip.CRC32();
+        var crc = new CRC32();
         crc.update(t);
         crc.update(data);
-        out.write(java.nio.ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
+        out.write(ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
     }
 
     private static void makeClip(FfmpegTools t, Path file) throws Exception {

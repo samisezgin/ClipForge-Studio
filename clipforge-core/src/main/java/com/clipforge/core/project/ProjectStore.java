@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -48,7 +49,7 @@ public final class ProjectStore {
         byte[] bytes = JSON.writeValueAsBytes(project);
         try (FileChannel ch = FileChannel.open(tmp, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
-            ch.write(java.nio.ByteBuffer.wrap(bytes));
+            ch.write(ByteBuffer.wrap(bytes));
             ch.force(true);
         }
         // antivirus, indexers or sync clients can briefly lock the target on Windows: retry a few times

@@ -15,15 +15,18 @@ import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeTableCell;
 import javafx.scene.control.TreeTableColumn;
 import javafx.scene.control.TreeTableView;
+import javafx.scene.control.skin.VirtualFlow;
 
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 /** Day ▸ Session ▸ Clip tree with tri-state selection. */
@@ -47,9 +50,9 @@ public final class ClipTreeView extends TreeTableView<ClipTreeView.Row> {
     private final AppController controller;
 
     /** Keys of collapsed day/session rows; kept across rebuilds so a rescan does not reset the tree. */
-    private final java.util.Set<String> collapsed = new java.util.HashSet<>();
+    private final Set<String> collapsed = new HashSet<>();
     /** Sessions the user expanded although they would be collapsed by default. */
-    private final java.util.Set<String> expanded = new java.util.HashSet<>();
+    private final Set<String> expanded = new HashSet<>();
 
     public ClipTreeView(AppController controller, ListenerBag listeners) {
         this.controller = controller;
@@ -117,7 +120,7 @@ public final class ClipTreeView extends TreeTableView<ClipTreeView.Row> {
     }
 
     private int firstVisibleRow() {
-        if (lookup(".virtual-flow") instanceof javafx.scene.control.skin.VirtualFlow<?> flow
+        if (lookup(".virtual-flow") instanceof VirtualFlow<?> flow
                 && flow.getFirstVisibleCell() != null) {
             return flow.getFirstVisibleCell().getIndex();
         }

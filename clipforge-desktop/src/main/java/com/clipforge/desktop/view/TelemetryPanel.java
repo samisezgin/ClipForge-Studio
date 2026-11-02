@@ -88,10 +88,10 @@ public final class TelemetryPanel extends VBox {
         clear();
     }
 
-    private List<java.nio.file.Path> readFor = List.of();
+    private List<Path> readFor = List.of();
 
     private void clearIfSelectionChanged() {
-        List<java.nio.file.Path> now = controller.selectedClips().stream().map(Clip::path).toList();
+        List<Path> now = controller.selectedClips().stream().map(Clip::path).toList();
         if (!now.equals(readFor)) {
             readFor = now;
             clear();

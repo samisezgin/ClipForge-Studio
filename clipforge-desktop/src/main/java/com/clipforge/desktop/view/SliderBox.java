@@ -11,6 +11,7 @@ import javafx.util.StringConverter;
 
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
+import java.util.function.DoubleSupplier;
 
 /**
  * A slider with a box for typing the exact value. Both stay in sync; typed values are rounded to the step and
@@ -125,9 +126,9 @@ final class SliderBox extends HBox {
      */
     private static final class Converter extends StringConverter<Double> {
         private final DecimalFormat format;
-        private final java.util.function.DoubleSupplier current;
+        private final DoubleSupplier current;
 
-        Converter(double step, java.util.function.DoubleSupplier current) {
+        Converter(double step, DoubleSupplier current) {
             format = new DecimalFormat(step >= 1 ? "0" : "0.##", DecimalFormatSymbols.getInstance());
             this.current = current;
         }

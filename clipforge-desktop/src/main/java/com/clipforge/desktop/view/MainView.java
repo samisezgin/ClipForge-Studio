@@ -19,17 +19,23 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.RadioMenuItem;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.SplitPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.ToolBar;
+import javafx.scene.control.Tooltip;
+import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCombination;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.FlowPane;
@@ -40,10 +46,12 @@ import javafx.scene.layout.VBox;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import javafx.stage.WindowEvent;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -95,21 +103,24 @@ public final class MainView {
         PipelinePanel pipeline = new PipelinePanel(controller, listeners, this::run);
         MergePanel merge = new MergePanel(controller, listeners);
         compressPanel = new CompressPanel(controller, listeners, this::sample);
-        javafx.scene.control.Tab mergeTab = new javafx.scene.control.Tab(Messages.get("merge.title"), merge);
-        javafx.scene.control.Tab speedTab = new javafx.scene.control.Tab(Messages.get("speed.title"),
+        Tab mergeTab = new Tab(Messages.get("merge.title"), merge);
+        Tab speedTab = new Tab(Messages.get("speed.title"),
                 new SpeedPanel(controller, listeners));
-        javafx.scene.control.Tab compressTab = new javafx.scene.control.Tab(Messages.get("compress.title"), compressPanel);
-        javafx.scene.control.Tab telemetryTab = new javafx.scene.control.Tab(Messages.get("telemetry.title"),
+        Tab compressTab = new Tab(Messages.get("compress.title"), compressPanel);
+        Tab telemetryTab = new Tab(Messages.get("telemetry.title"),
                 new TelemetryPanel(controller, host, listeners));
-        javafx.scene.control.TabPane tabs = new javafx.scene.control.TabPane(mergeTab, speedTab, compressTab,
+        TabPane tabs = new TabPane(mergeTab, speedTab, compressTab,
                 telemetryTab);
-        tabs.setTabClosingPolicy(javafx.scene.control.TabPane.TabClosingPolicy.UNAVAILABLE);
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         audioPanel = new AudioPanel(controller, listeners);
         AudioPanel audio = audioPanel;
         VBox side = new VBox(10, pipeline, outputBox, audio, tabs);
+        // long descriptions wrap to the panel width instead of being cut off (tab contents are not children yet)
+        TextFit.fixWrapping(side);
+        tabs.getTabs().forEach(t -> TextFit.fixWrapping(t.getContent()));
         side.setPadding(new Insets(12));
         side.getStyleClass().add("side-panel");
-        javafx.scene.control.ScrollPane sideScroll = new javafx.scene.control.ScrollPane(side);
+        ScrollPane sideScroll = new ScrollPane(side);
         sideScroll.setFitToWidth(true);
         sideScroll.setMinWidth(320);
         sideScroll.setPrefWidth(360);
@@ -145,7 +156,7 @@ public final class MainView {
         MenuItem save = item("menu.file.save", "Shortcut+S", this::save);
         MenuItem saveAs = item("menu.file.saveAs", "Shortcut+Shift+S", this::saveAs);
         MenuItem exit = item("menu.file.exit", null, () -> stage.fireEvent(
-                new javafx.stage.WindowEvent(stage, javafx.stage.WindowEvent.WINDOW_CLOSE_REQUEST)));
+                new WindowEvent(stage, WindowEvent.WINDOW_CLOSE_REQUEST)));
         file.getItems().addAll(newP, open, recent, new SeparatorMenuItem(), save, saveAs,
                 new SeparatorMenuItem(), exit);
 
@@ -167,7 +178,7 @@ public final class MainView {
         (controller.settings().darkTheme() ? dark : light).setSelected(true);
         dark.setOnAction(e -> onThemeChange.accept(true));
         light.setOnAction(e -> onThemeChange.accept(false));
-        javafx.scene.control.CheckMenuItem watch = new javafx.scene.control.CheckMenuItem(Messages.get("menu.view.watch"));
+        CheckMenuItem watch = new CheckMenuItem(Messages.get("menu.view.watch"));
         watch.setSelected(controller.watchFolders());
         watch.setOnAction(e -> controller.setWatchFolders(watch.isSelected()));
         view.getItems().addAll(language, new SeparatorMenuItem(), dark, light, new SeparatorMenuItem(), watch);
@@ -257,7 +268,7 @@ public final class MainView {
             Button chip = new Button(Messages.get("folders.chip", f));
             chip.getStyleClass().addAll(Styles.SMALL, Styles.BUTTON_OUTLINED);
             chip.setOnAction(e -> controller.removeFolder(f));
-            chip.setTooltip(new javafx.scene.control.Tooltip(Messages.get("folders.remove")));
+            chip.setTooltip(new Tooltip(Messages.get("folders.remove")));
             folderChips.getChildren().add(chip);
         }
     }
@@ -480,7 +491,7 @@ public final class MainView {
         a.setContentText(Messages.get("about.text", ffmpeg));
         var logo = MainView.class.getResource("/com/clipforge/desktop/logo.png");
         if (logo != null) {
-            javafx.scene.image.ImageView view = new javafx.scene.image.ImageView(logo.toExternalForm());
+            ImageView view = new ImageView(logo.toExternalForm());
             view.setFitWidth(180);
             view.setPreserveRatio(true);
             view.setSmooth(true);
@@ -581,7 +592,7 @@ public final class MainView {
         root.setDisable(true);
         Thread.ofVirtual().start(() -> {
             try {
-                controller.awaitQueueIdle(java.time.Duration.ofHours(6));
+                controller.awaitQueueIdle(Duration.ofHours(6));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }

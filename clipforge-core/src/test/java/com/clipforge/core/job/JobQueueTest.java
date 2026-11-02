@@ -11,6 +11,7 @@ import com.clipforge.core.project.JobRecord;
 import com.clipforge.core.project.JobState;
 import com.clipforge.core.project.Project;
 import com.clipforge.core.project.ProjectStore;
+import com.clipforge.core.project.RecoveryService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -112,7 +113,7 @@ class JobQueueTest {
         assertEquals(JobState.PAUSED, a.getState(), "a changed source is never used without asking");
         assertEquals("error.sourceChanged", a.getErrorKey());
 
-        com.clipforge.core.project.RecoveryService.acceptChangedSources(a); // the user confirms the new file
+        RecoveryService.acceptChangedSources(a); // the user confirms the new file
         q.resume();
         assertTrue(q.awaitIdle(Duration.ofSeconds(60)));
         assertEquals(JobState.DONE, a.getState());

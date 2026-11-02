@@ -1,7 +1,8 @@
 package com.clipforge.core.compress;
 
-import com.clipforge.core.audio.AudioMode;
 import com.clipforge.core.FfmpegTestSupport;
+import com.clipforge.core.audio.AudioMode;
+import com.clipforge.core.audio.MusicSettings;
 import com.clipforge.core.ffmpeg.FfmpegTools;
 import com.clipforge.core.ffmpeg.ProbeService;
 import com.clipforge.core.ffmpeg.Progress;
@@ -25,6 +26,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -316,7 +319,7 @@ class SegmentedEncoderTest {
                 "sine=frequency=600:duration=3", "-c:a", "libmp3lame", tune.toString()));
         MediaInfo src = new ProbeService(tools).probe(source).orElseThrow();
         Path outDir = Files.createDirectories(tmp.resolve("music-out"));
-        var music = new com.clipforge.core.audio.MusicSettings(List.of(tune.toString()), true, 0.5, true, 2, 1.0,
+        var music = new MusicSettings(List.of(tune.toString()), true, 0.5, true, 2, 1.0,
                 true, 0.2);
         CompressOptions withMusic = new CompressOptions(profile, profile.defaultQuality(), 4, 2,
                 AudioMode.MUSIC, music);
@@ -342,10 +345,10 @@ class SegmentedEncoderTest {
     void burnsRecordingTimeIntoThePicture() throws Exception {
         assumeTrue(TimeOverlay.font().isPresent(), "no font available");
         MediaInfo m = new ProbeService(tools).probe(source).orElseThrow();
-        long start = java.time.LocalDateTime.of(2026, 11, 1, 23, 39, 33)
-                .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        long start = LocalDateTime.of(2026, 11, 1, 23, 39, 33)
+                .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
         CompressOptions o = new CompressOptions(profile, profile.defaultQuality(), 4, 2, AudioMode.REMOVE,
-                com.clipforge.core.audio.MusicSettings.DEFAULT, true);
+                MusicSettings.DEFAULT, true);
         Path outDir = Files.createDirectories(tmp.resolve("overlay"));
         CompressSpec spec = new CompressSpec(List.of(CompressInput.of(source, m, start)),
                 outDir.resolve("stamped.mp4").toString(), o, m.duration().toMillis(), Files.size(source), false);
