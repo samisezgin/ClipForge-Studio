@@ -64,7 +64,10 @@ public final class AudioPanel extends TitledPane {
         remove.setToggleGroup(mode);
         music.setToggleGroup(mode);
         remove.setTooltip(new Tooltip(Messages.get("audio.remove.tip")));
-        mode.selectedToggleProperty().addListener((o, a, b) -> save());
+        mode.selectedToggleProperty().addListener((o, a, b) -> {
+            save();
+            updateLength();
+        });
 
         tracks.setPrefHeight(110);
         tracks.setPlaceholder(new Label(Messages.get("audio.tracks.empty")));
@@ -77,6 +80,7 @@ public final class AudioPanel extends TitledPane {
             }
         });
         Button add = small("audio.tracks.add", e -> addTracks());
+        tracks.setPrefHeight(84);
         Button del = small("audio.tracks.remove", e -> {
             int i = tracks.getSelectionModel().getSelectedIndex();
             if (i >= 0) {
@@ -87,13 +91,17 @@ public final class AudioPanel extends TitledPane {
         });
         Button up = small("audio.tracks.up", e -> move(-1));
         Button down = small("audio.tracks.down", e -> move(1));
+        var selected = tracks.getSelectionModel().selectedIndexProperty();
+        del.disableProperty().bind(selected.lessThan(0));
+        up.disableProperty().bind(selected.lessThan(1));
+        down.disableProperty().bind(selected.lessThan(0).or(javafx.beans.binding.Bindings.createBooleanBinding(
+                () -> selected.get() >= tracks.getItems().size() - 1, selected, tracks.getItems())));
         HBox trackButtons = new HBox(4, add, del, up, down);
         trackButtons.setAlignment(Pos.CENTER_LEFT);
         playlistLength.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
 
         loop.setTooltip(new Tooltip(Messages.get("audio.loop.tip")));
         loop.selectedProperty().addListener((o, a, b) -> save());
-        crossfade.setMajorTickUnit(0.5);
         crossfade.setTooltip(new Tooltip(Messages.get("audio.crossfade.tip")));
         crossfade.valueProperty().addListener((o, a, b) -> {
             double r = Math.round(b.doubleValue() * 10) / 10.0;
@@ -111,6 +119,12 @@ public final class AudioPanel extends TitledPane {
         fadeSeconds.setPrefWidth(90);
         fadeSeconds.disableProperty().bind(fadeOut.selectedProperty().not());
         fadeSeconds.valueProperty().addListener((o, a, b) -> save());
+        // a Spinner only commits typed text on Enter: also commit when the field loses focus
+        fadeSeconds.getEditor().focusedProperty().addListener((o, was, now) -> {
+            if (!now) {
+                commitPending();
+            }
+        });
         fadeOut.selectedProperty().addListener((o, a, b) -> save());
         HBox fadeRow = new HBox(8, fadeOut, fadeSeconds, new Label(Messages.get("audio.secondsUnit")));
         fadeRow.setAlignment(Pos.CENTER_LEFT);
@@ -137,12 +151,13 @@ public final class AudioPanel extends TitledPane {
             save();
         });
 
-        VBox musicBox = new VBox(8,
-                tracks, trackButtons, playlistLength,
-                loop, row(new Label(Messages.get("audio.crossfade")), crossfade, crossfadeValue),
-                fadeRow,
+        TitledPane more = new TitledPane(Messages.get("audio.more"), new VBox(8,
+                row(new Label(Messages.get("audio.crossfade")), crossfade, crossfadeValue),
                 row(new Label(Messages.get("audio.volume")), volume, volumeValue),
-                mixOriginal, row(new Label(Messages.get("audio.originalVolume")), originalVolume, originalValue));
+                mixOriginal, row(new Label(Messages.get("audio.originalVolume")), originalVolume, originalValue)));
+        more.setExpanded(false);
+        more.setAnimated(false);
+        VBox musicBox = new VBox(8, tracks, trackButtons, playlistLength, loop, fadeRow, more);
         musicBox.disableProperty().bind(music.selectedProperty().not());
         musicBox.managedProperty().bind(music.selectedProperty());
         musicBox.visibleProperty().bind(music.selectedProperty());
@@ -196,6 +211,22 @@ public final class AudioPanel extends TitledPane {
         updateLength();
     }
 
+    /** Commits a fade-out length that was typed but not confirmed with Enter; call before starting a job. */
+    public void commitPending() {
+        String text = fadeSeconds.getEditor().getText();
+        try {
+            double v = Double.parseDouble(text.trim().replace(',', '.'));
+            v = Math.max(MusicSettings.MIN_FADE, Math.min(MusicSettings.MAX_FADE, v));
+            if (!Double.valueOf(v).equals(fadeSeconds.getValue())) {
+                fadeSeconds.getValueFactory().setValue(v);
+            }
+            fadeSeconds.getEditor().setText(fadeSeconds.getValueFactory().getConverter().toString(v));
+        } catch (NumberFormatException e) {
+            // not a number: show the last valid value again
+            fadeSeconds.getEditor().setText(fadeSeconds.getValueFactory().getConverter().toString(fadeSeconds.getValue()));
+        }
+    }
+
     private void save() {
         if (loading) {
             return;
@@ -233,14 +264,22 @@ public final class AudioPanel extends TitledPane {
         save();
     }
 
+    private long measureGeneration;
+
     private void updateLength() {
-        if (tracks.getItems().isEmpty()) {
+        if (tracks.getItems().isEmpty() || !music.isSelected()) {
             playlistLength.setText("");
             return;
         }
-        controller.measureMusic(seconds -> playlistLength.setText(seconds < 0
-                ? Messages.get("audio.tracks.unreadable")
-                : Messages.get("audio.tracks.length", tracks.getItems().size(),
-                Formats.duration(Duration.ofMillis(Math.round(seconds * 1000))))));
+        long generation = ++measureGeneration;
+        int count = tracks.getItems().size();
+        controller.measureMusic(seconds -> {
+            if (generation != measureGeneration) {
+                return; // an older playlist: a newer measurement is on its way
+            }
+            playlistLength.setText(seconds < 0 ? Messages.get("audio.tracks.unreadable")
+                    : Messages.get("audio.tracks.length", count,
+                    Formats.duration(Duration.ofMillis(Math.round(seconds * 1000)))));
+        });
     }
 }

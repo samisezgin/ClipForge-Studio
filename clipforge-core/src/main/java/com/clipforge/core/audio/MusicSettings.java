@@ -31,6 +31,23 @@ public record MusicSettings(List<String> tracks, boolean loop, double crossfadeS
         originalVolume = clamp(originalVolume, 0, 1);
     }
 
+    /** JSON: missing fields fall back to {@link #DEFAULT} (a partial object must not mean volume 0 / no loop). */
+    @com.fasterxml.jackson.annotation.JsonCreator
+    static MusicSettings fromJson(@com.fasterxml.jackson.annotation.JsonProperty("tracks") List<String> tracks,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("loop") Boolean loop,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("crossfadeSeconds") Double crossfade,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("fadeOut") Boolean fadeOut,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("fadeOutSeconds") Double fadeSeconds,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("volume") Double volume,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("mixOriginal") Boolean mix,
+                                  @com.fasterxml.jackson.annotation.JsonProperty("originalVolume") Double originalVolume) {
+        MusicSettings d = DEFAULT;
+        return new MusicSettings(tracks, loop == null ? d.loop() : loop,
+                crossfade == null ? d.crossfadeSeconds() : crossfade, fadeOut == null ? d.fadeOut() : fadeOut,
+                fadeSeconds == null ? d.fadeOutSeconds() : fadeSeconds, volume == null ? d.volume() : volume,
+                mix == null ? d.mixOriginal() : mix, originalVolume == null ? d.originalVolume() : originalVolume);
+    }
+
     public MusicSettings withTracks(List<String> t) {
         return new MusicSettings(t, loop, crossfadeSeconds, fadeOut, fadeOutSeconds, volume, mixOriginal, originalVolume);
     }

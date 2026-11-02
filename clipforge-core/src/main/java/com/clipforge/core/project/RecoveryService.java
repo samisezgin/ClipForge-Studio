@@ -35,7 +35,8 @@ public final class RecoveryService {
         List<Issue> issues = new ArrayList<>();
         for (JobRecord job : project.getJobs()) {
             if (job.getState().unfinished()) {
-                List<String> changed = job.getSources().stream()
+                List<String> changed = java.util.stream.Stream.concat(job.getSources().stream(),
+                                job.getMusicSources().stream())
                         .filter(f -> !f.matchesDisk()).map(Fingerprint::path).toList();
                 issues.add(new Issue(job, changed.isEmpty() ? Kind.INTERRUPTED : Kind.SOURCE_CHANGED, changed));
             } else if (job.getState() == JobState.DONE && job.output() != null
@@ -76,6 +77,7 @@ public final class RecoveryService {
                 return;
             }
             Files.deleteIfExists(part);
+            com.clipforge.core.merge.MergeService.discard(job.getMerge()); // also intermediate music files
         }
         job.clearError();
         job.setState(JobState.PENDING);
@@ -89,5 +91,16 @@ public final class RecoveryService {
             refreshed.add(Fingerprint.of(Path.of(f.path())));
         }
         job.setSources(refreshed);
+        List<Fingerprint> music = new ArrayList<>();
+        for (Fingerprint f : job.getMusicSources()) {
+            // a deleted track is left as it is: the job then reports which music file is missing
+            music.add(java.nio.file.Files.isRegularFile(Path.of(f.path())) ? Fingerprint.of(Path.of(f.path())) : f);
+        }
+        job.setMusicSources(music);
+    }
+
+    /** {@code true} if one of the video sources (not only the music) changed. */
+    public static boolean videoSourcesChanged(JobRecord job) {
+        return job.getSources().stream().anyMatch(f -> !f.matchesDisk());
     }
 }

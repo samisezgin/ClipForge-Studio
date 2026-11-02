@@ -60,6 +60,8 @@ public final class MainView {
     private final ListenerBag listeners = new ListenerBag();
     private OutputFolderBox outputBox;
     private CompressPanel compressPanel;
+    private AudioPanel audioPanel;
+    private boolean startingCompress;
 
     public MainView(AppController controller, Stage stage, HostServices host,
                     Consumer<String> onLanguageChange, Consumer<Boolean> onThemeChange) {
@@ -97,9 +99,12 @@ public final class MainView {
         });
         javafx.scene.control.Tab mergeTab = new javafx.scene.control.Tab(Messages.get("merge.title"), merge);
         javafx.scene.control.Tab compressTab = new javafx.scene.control.Tab(Messages.get("compress.title"), compressPanel);
-        javafx.scene.control.TabPane tabs = new javafx.scene.control.TabPane(mergeTab, compressTab);
+        javafx.scene.control.Tab telemetryTab = new javafx.scene.control.Tab(Messages.get("telemetry.title"),
+                new TelemetryPanel(controller, host, listeners));
+        javafx.scene.control.TabPane tabs = new javafx.scene.control.TabPane(mergeTab, compressTab, telemetryTab);
         tabs.setTabClosingPolicy(javafx.scene.control.TabPane.TabClosingPolicy.UNAVAILABLE);
-        AudioPanel audio = new AudioPanel(controller, listeners);
+        audioPanel = new AudioPanel(controller, listeners);
+        AudioPanel audio = audioPanel;
         VBox side = new VBox(10, outputBox, audio, tabs);
         side.setPadding(new Insets(12));
         side.getStyleClass().add("side-panel");
@@ -274,11 +279,17 @@ public final class MainView {
     }
 
     private void compress() {
+        audioPanel.commitPending();
         if (!outputBox.commit()) {
             return;
         }
+        if (startingCompress) {
+            return; // a double click must not queue the same job twice
+        }
+        startingCompress = true;
         controller.setStatus("status.planning");
         controller.planCompressAsync(plan -> {
+            startingCompress = false;
             if (!plan.ok()) {
                 controller.setStatus("status.ready");
                 error(Messages.get("compress.error.title"), Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
@@ -289,6 +300,7 @@ public final class MainView {
     }
 
     private void sample() {
+        audioPanel.commitPending();
         if (!outputBox.commit()) {
             compressPanel.showSampleError("");
             return;
@@ -301,10 +313,11 @@ public final class MainView {
             var spec = plan.specs().getFirst();
             controller.sample(spec, r -> compressPanel.showSample(r, spec.totalBytes()),
                     msg -> compressPanel.showSampleError(Messages.get("compress.sample.failed")));
-        });
+        }, true);
     }
 
     private void merge() {
+        audioPanel.commitPending();
         if (!outputBox.commit()) {
             return;
         }

@@ -4,6 +4,7 @@
 module com.clipforge.core {
     requires transitive java.logging;
     requires com.fasterxml.jackson.databind;
+    requires com.fasterxml.jackson.annotation;
     requires com.fasterxml.jackson.datatype.jsr310;
 
     exports com.clipforge.core;
@@ -17,6 +18,7 @@ module com.clipforge.core {
     exports com.clipforge.core.mp4;
     exports com.clipforge.core.project;
     exports com.clipforge.core.scan;
+    exports com.clipforge.core.telemetry;
     exports com.clipforge.core.util;
 
     opens com.clipforge.core.model to com.fasterxml.jackson.databind;

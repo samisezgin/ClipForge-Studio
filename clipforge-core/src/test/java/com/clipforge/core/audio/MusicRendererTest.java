@@ -134,6 +134,59 @@ class MusicRendererTest {
         assertTrue(silences(out).isEmpty());
     }
 
+    /** [peak dB, RMS dB] of the whole file. */
+    private double[] levels(Path f) throws Exception {
+        Process p = new ProcessBuilder(tools.ffmpeg().toString(), "-hide_banner", "-i", f.toString(),
+                "-af", "astats=metadata=0", "-f", "null", "-").redirectErrorStream(true).start();
+        p.getOutputStream().close();
+        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        p.waitFor();
+        Matcher peak = Pattern.compile("Overall[\\s\\S]*?Peak level dB: (-?[0-9.]+)").matcher(out);
+        Matcher rms = Pattern.compile("Overall[\\s\\S]*?RMS level dB: (-?[0-9.]+)").matcher(out);
+        assertTrue(peak.find() && rms.find(), out);
+        return new double[]{Double.parseDouble(peak.group(1)), Double.parseDouble(rms.group(1))};
+    }
+
+    @Test
+    void loudSettingsNeverClip() throws Exception {
+        Path loud = tmp.resolve("loud.wav");
+        FfmpegTestSupport.run(List.of(tools.ffmpeg().toString(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                "sine=frequency=440:duration=4", "-af", "volume=6", loud.toString()));
+        MusicSettings s = new MusicSettings(List.of(loud.toString()), true, 0, false, 3, 2.0, false, 0.2);
+        double[] lv = levels(render(s, 6, null));
+        assertTrue(lv[0] <= -0.3, "limited below full scale, peak " + lv[0]);
+    }
+
+    @Test
+    void monoTracksKeepTheirLevel() throws Exception {
+        Path mono = tmp.resolve("mono.wav");
+        Path stereo = tmp.resolve("stereo.wav");
+        FfmpegTestSupport.run(List.of(tools.ffmpeg().toString(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                "sine=frequency=440:duration=4", "-ac", "1", mono.toString()));
+        FfmpegTestSupport.run(List.of(tools.ffmpeg().toString(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                "sine=frequency=440:duration=4", "-af", "pan=stereo|c0=c0|c1=c0", stereo.toString()));
+        double m = levels(render(settings(List.of(mono), false, 0, false), 4, null))[1];
+        double st = levels(render(settings(List.of(stereo), false, 0, false), 4, null))[1];
+        assertEquals(st, m, 0.5, "mono up-mix without a 3 dB drop");
+    }
+
+    @Test
+    void singlePassFadesAtTheEndOfTheMusic() throws Exception {
+        Path t = tone("end.mp3", 440, 6);
+        MusicSettings s = new MusicSettings(List.of(t.toString()), false, 0, true, 2, 1.0, false, 0.2);
+        List<double[]> silent = silences(render(s, 12, null));
+        assertEquals(1, silent.size());
+        assertTrue(silent.getFirst()[0] > 5.0 && silent.getFirst()[0] < 6.1,
+                "the fade happens before the music ends, not in the silence: " + silent.getFirst()[0]);
+    }
+
+    @Test
+    void longPlaylistIsCutToTheVideo() throws Exception {
+        Path t = tone("long.mp3", 440, 120);
+        Path out = render(settings(List.of(t), true, 1, true), 10, null);
+        assertEquals(10.0, probe(out).duration().toMillis() / 1000.0, 0.1);
+    }
+
     @Test
     void unreadableTrackIsReported() throws Exception {
         Path bad = Files.writeString(tmp.resolve("not music.mp3"), "nope");

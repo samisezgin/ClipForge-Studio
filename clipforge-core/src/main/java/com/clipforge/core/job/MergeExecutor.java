@@ -57,6 +57,13 @@ public final class MergeExecutor implements JobExecutor {
         }
     }
 
+    @Override
+    public void discard(JobRecord job) {
+        if (job.getMerge() != null) {
+            MergeService.discard(job.getMerge());
+        }
+    }
+
     static Outcome fail(JobRecord job, JobContext ctx, String key, String detail, String... args) {
         synchronized (ctx.lock()) {
             job.fail(key, detail, args);

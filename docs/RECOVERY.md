@@ -39,6 +39,15 @@ append segment to output → `FileChannel.force()` → atomically update project
 Cancelling a compression job, running or not, deletes its growing output and work folder. Clearing failed or
 cancelled jobs from the list does the same.
 
+## Audio (phase 3)
+- The soundtrack of a compression job (original audio copy, or rendered background music) is prepared once as
+  `<output>.work/audio.m4a` and marked `audioReady`. Stop now during that step deletes the file and the step runs
+  again on resume; if the file disappears later, it is prepared again before the final mux.
+- Music files are fingerprinted separately from the video sources. If only a music file changed, resuming re-renders
+  the soundtrack and keeps all encoded video segments; a deleted music file fails the job with the file name.
+- Merges with music render the soundtrack into `<output>.work/` first; the folder is removed when the merge ends,
+  is cancelled or discarded, and when an interrupted merge is resumed.
+
 ## Merge jobs (phase 1)
 Merging is stream copy and takes seconds to minutes, so it resumes per output file: finished outputs are skipped,
-a partially written output is deleted and redone.
+a partially written output and its work folder are deleted and redone.

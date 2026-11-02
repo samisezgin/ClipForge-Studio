@@ -41,6 +41,22 @@ public final class MergeService {
         this.tools = tools;
     }
 
+    /** Folder for intermediate audio files of a merge with music. */
+    public static Path workDir(Path output) {
+        return output.resolveSibling(output.getFileName() + ".work");
+    }
+
+    /** Removes a merge job's partial output and intermediate files (cancelled, discarded or recovered job). */
+    public static void discard(MergeSpec spec) {
+        try {
+            Path out = Path.of(spec.output());
+            Files.deleteIfExists(partPath(out));
+            deleteDir(workDir(out));
+        } catch (IOException e) {
+            LOG.warning("Cannot remove partial files of " + spec.output() + ": " + e.getMessage());
+        }
+    }
+
     /** Temporary file FFmpeg writes to: {@code a/b.mp4} → {@code a/b.part.mp4}. */
     public static Path partPath(Path output) {
         return OutputNaming.partOf(output);
@@ -58,7 +74,7 @@ public final class MergeService {
         Files.createDirectories(output.toAbsolutePath().getParent());
         Path part = partPath(output);
         Files.deleteIfExists(part);
-        Path work = output.resolveSibling(output.getFileName() + ".work");
+        Path work = workDir(output);
         Path list = Files.createTempFile("clipforge-concat-", ".txt");
         try {
             Files.writeString(list, concatList(spec.inputs()), StandardCharsets.UTF_8);
@@ -83,7 +99,12 @@ public final class MergeService {
             return finish(result, part, output);
         } finally {
             Files.deleteIfExists(list);
-            deleteDir(work);
+            try {
+                deleteDir(work);
+            } catch (IOException e) {
+                // never let a clean-up problem hide the merge result
+                LOG.warning("Cannot remove " + work + ": " + e.getMessage());
+            }
         }
     }
 
@@ -94,30 +115,42 @@ public final class MergeService {
         Path original = null;
         if (s.mixOriginal()) {
             original = work.resolve("original.m4a");
-            FfmpegResult r = FfmpegProcess.run(List.of(tools.ffmpeg().toString(), "-f", "concat", "-safe", "0",
-                    "-i", list.toString(), "-map", "0:a:0?", "-vn", "-c:a", "copy", "-f", "mp4", "-y",
-                    original.toString()), Duration.ZERO, null, token);
-            if (!r.success()) {
-                if (r.cancelled()) {
-                    return r;
+            FfmpegResult r = null;
+            // copy if possible; PCM or other codecs that MP4 cannot hold are converted to AAC
+            for (List<String> codec : List.of(List.of("-c:a", "copy"), List.of("-c:a", "aac", "-b:a", "160k"))) {
+                List<String> cmd = new ArrayList<>(List.of(tools.ffmpeg().toString(), "-f", "concat", "-safe", "0",
+                        "-i", list.toString(), "-map", "0:a:0", "-vn"));
+                cmd.addAll(codec);
+                cmd.addAll(List.of("-f", "mp4", "-y", original.toString()));
+                r = FfmpegProcess.run(cmd, Duration.ZERO, null, token);
+                if (r.success() || r.cancelled()) {
+                    break;
                 }
-                original = null; // no usable original audio: music only
+            }
+            if (r.cancelled()) {
+                return r;
+            }
+            if (!r.success()) {
+                if (r.stderrText().toLowerCase(java.util.Locale.ROOT).contains("no space left")) {
+                    return r; // a real error, not "no original audio"
+                }
+                LOG.info("Source has no usable audio to mix under the music");
+                original = null;
             }
         }
         return new MusicRenderer(tools).render(s, spec.totalDurationMs() / 1000.0, original, work,
                 work.resolve("music.m4a"), token);
     }
 
-    private static void deleteDir(Path dir) throws IOException {
+    static void deleteDir(Path dir) throws IOException {
         if (!Files.isDirectory(dir)) {
             return;
         }
-        try (var files = Files.list(dir)) {
-            for (Path f : files.toList()) {
+        try (var walk = Files.walk(dir)) {
+            for (Path f : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
                 Files.deleteIfExists(f);
             }
         }
-        Files.deleteIfExists(dir);
     }
 
     private static FfmpegResult finish(FfmpegResult result, Path part, Path output) throws IOException {

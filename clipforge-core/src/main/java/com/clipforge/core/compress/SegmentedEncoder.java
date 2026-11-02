@@ -482,10 +482,18 @@ public final class SegmentedEncoder implements JobExecutor {
         Path audio = work.resolve("audio.m4a");
         boolean withAudio = keepsAudio(spec);
         if (withAudio && !Files.isRegularFile(audio)) {
+            // deleted meanwhile (e.g. by a clean-up tool): prepare it again
             synchronized (ctx.lock()) {
                 state.setAudioReady(false);
             }
-            return fail(job, ctx, "error.audioMissing", null);
+            Outcome a = prepareAudio(job, ctx, spec, work, audio);
+            if (a != null) {
+                return a;
+            }
+            synchronized (ctx.lock()) {
+                state.setAudioReady(true);
+            }
+            ctx.save();
         }
         Path muxed = work.resolve("final.mp4");
         // keep the source's offset between video and audio start (both tracks start at 0 in our files);
