@@ -17,6 +17,7 @@ public final class ProbeService {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger(ProbeService.class.getName());
 
     private final FfmpegTools tools;
 
@@ -26,14 +27,32 @@ public final class ProbeService {
 
     /** @return media info, or empty if ffprobe cannot read the file (missing moov, not a media file, ...) */
     public Optional<MediaInfo> probe(Path file) {
+        Duration timeout = timeoutFor(file);
         try {
             ProcessCapture.Output out = ProcessCapture.run(List.of(tools.ffprobe().toString(),
                     "-v", "error", "-print_format", "json", "-show_format", "-show_streams", file.toString()),
-                    TIMEOUT);
+                    timeout);
+            if (out.exitCode() == -1) {
+                LOG.warning(() -> "ffprobe timed out after " + timeout.toSeconds() + " s: " + file);
+            }
             return out.exitCode() != 0 ? Optional.empty() : parse(out.stdout());
         } catch (IOException e) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * ffprobe has to walk every fragment of a fragmented MP4 (such as ClipForge's own merge outputs) to find its
+     * duration, which takes long for multi-GB files on a slow or busy disk - so large files get more time.
+     */
+    static Duration timeoutFor(Path file) {
+        long gb;
+        try {
+            gb = java.nio.file.Files.size(file) >> 30;
+        } catch (IOException e) {
+            gb = 0;
+        }
+        return TIMEOUT.plusSeconds(Math.min(570, 30 * gb));
     }
 
     /** Parses ffprobe JSON output. Package-private for tests. */

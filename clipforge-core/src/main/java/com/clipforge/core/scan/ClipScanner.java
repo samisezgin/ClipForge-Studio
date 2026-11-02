@@ -25,6 +25,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 /**
@@ -58,23 +59,39 @@ public final class ClipScanner {
      * @param progress called with (done, total) after each probed file, may be {@code null}
      */
     public List<Clip> scan(List<Path> folders, BiConsumer<Integer, Integer> progress) throws IOException {
+        return scan(folders, progress, null);
+    }
+
+    /**
+     * Like {@link #scan(List, BiConsumer)}, but also reports partial results while probing.
+     *
+     * @param partial called after each probed file with the clips found so far, sorted and with duplicates marked
+     *                like the final result; may be {@code null}. Calls never run concurrently.
+     */
+    public List<Clip> scan(List<Path> folders, BiConsumer<Integer, Integer> progress,
+                           Consumer<List<Clip>> partial) throws IOException {
         List<Path> files = listVideos(folders);
         AtomicInteger done = new AtomicInteger();
         Object progressLock = new Object();
         int[] reported = {0};
+        List<Clip> found = new ArrayList<>(files.size()); // guarded by progressLock
         List<Clip> clips = new ArrayList<>(files.size());
         try (ExecutorService pool = Executors.newFixedThreadPool(parallelism)) {
             List<Future<Clip>> futures = new ArrayList<>(files.size());
             for (Path f : files) {
                 futures.add(pool.submit(() -> {
                     Clip c = scanFile(f);
-                    if (progress != null) {
-                        int n = done.incrementAndGet();
-                        synchronized (progressLock) { // keep reported values monotonic
-                            if (n > reported[0]) {
-                                reported[0] = n;
-                                progress.accept(n, files.size());
+                    int n = done.incrementAndGet();
+                    synchronized (progressLock) { // keep reported values monotonic
+                        if (partial != null) {
+                            if (c != null) {
+                                found.add(c);
                             }
+                            partial.accept(sortAndMark(found));
+                        }
+                        if (progress != null && n > reported[0]) {
+                            reported[0] = n;
+                            progress.accept(n, files.size());
                         }
                     }
                     return c;
@@ -94,11 +111,20 @@ public final class ClipScanner {
                 }
             }
         }
-        clips.sort(Comparator.comparing((Clip c) -> c.channel() == null ? "" : c.channel())
-                .thenComparing(Clip::start)
-                .thenComparingLong(Clip::sequence)
-                .thenComparing(c -> c.path().toString()));
-        return markDuplicates(clips);
+        return sortAndMark(clips);
+    }
+
+    private static final Comparator<Clip> ORDER = Comparator
+            .comparing((Clip c) -> c.channel() == null ? "" : c.channel())
+            .thenComparing(Clip::start)
+            .thenComparingLong(Clip::sequence)
+            .thenComparing(c -> c.path().toString());
+
+    /** Sorted copy with duplicates marked; the input list is not changed. */
+    private static List<Clip> sortAndMark(List<Clip> clips) {
+        List<Clip> sorted = new ArrayList<>(clips);
+        sorted.sort(ORDER);
+        return markDuplicates(sorted);
     }
 
     /**

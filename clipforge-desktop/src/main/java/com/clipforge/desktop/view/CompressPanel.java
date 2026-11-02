@@ -57,6 +57,7 @@ public final class CompressPanel extends VBox {
     private final Button startButton = new Button(Messages.get("compress.start"));
     private boolean loading;
     private boolean sampling;
+    private boolean optionsUsable;
     private final Label summary = new Label();
     private final Label encoderNote = new Label();
 
@@ -178,6 +179,7 @@ public final class CompressPanel extends VBox {
         listeners.on(controller.projectVersionProperty(), (o, a, b) -> load());
         listeners.on(controller.selectionVersionProperty(), (o, a, b) -> updateSummary());
         listeners.on(controller.sessions(), c -> updateSummary());
+        listeners.on(controller.scanningProperty(), (o, a, b) -> updateButtons());
         load();
     }
 
@@ -190,8 +192,8 @@ public final class CompressPanel extends VBox {
             encoder.setPromptText(Messages.get(av == null ? "compress.encoder.detecting" : "compress.encoder.none"));
             CompressOptions o = controller.compressOptions();
             boolean usable = o != null;
-            startButton.setDisable(!usable);
-            sampleButton.setDisable(!usable || sampling);
+            optionsUsable = usable;
+            updateButtons();
             boolean replaced = controller.savedEncoderUnavailable();
             encoderNote.setText(replaced ? Messages.get("compress.encoder.replaced") : "");
             encoderNote.setVisible(replaced);
@@ -265,6 +267,7 @@ public final class CompressPanel extends VBox {
 
     /** What will be compressed: the chosen file, or the selection grouped by the merge mode. */
     private void updateSummary() {
+        updateButtons();
         if (fromFile.isSelected()) {
             String f = file.getText().trim();
             String name;
@@ -285,9 +288,16 @@ public final class CompressPanel extends VBox {
     }
 
     /** Shows the measured sample and the extrapolated result. */
+    /** Compressing the selection waits for the scan: the list is still filling in and sessions may grow. */
+    private void updateButtons() {
+        boolean blocked = !optionsUsable || (!fromFile.isSelected() && controller.scanningProperty().get());
+        startButton.setDisable(blocked);
+        sampleButton.setDisable(blocked || sampling);
+    }
+
     public void showSample(CompressSampler.Result r, long inputBytes) {
         sampling = false;
-        sampleButton.setDisable(false);
+        updateButtons();
         sampleResult.setText(Messages.get("compress.sample.result", r.bitrateKbps() / 1000.0,
                 Formats.size(r.estimatedBytes()), Math.round((1 - r.ratio(inputBytes)) * 100), r.speed(),
                 Formats.duration(r.estimatedTime())));
@@ -295,7 +305,7 @@ public final class CompressPanel extends VBox {
 
     public void showSampleError(String text) {
         sampling = false;
-        sampleButton.setDisable(false);
+        updateButtons();
         sampleResult.setText(text);
     }
 

@@ -440,8 +440,22 @@ public final class AppController {
             try {
                 ClipScanner scanner = new ClipScanner(new ProbeService(t),
                         new TimestampResolver(ZoneId.systemDefault()), clock);
+                // partial results reach the list at most every 300 ms; only the newest snapshot is applied
+                java.util.concurrent.atomic.AtomicReference<List<Clip>> pending =
+                        new java.util.concurrent.atomic.AtomicReference<>();
+                java.util.concurrent.Executor later = java.util.concurrent.CompletableFuture
+                        .delayedExecutor(300, java.util.concurrent.TimeUnit.MILLISECONDS);
                 List<Clip> clips = scanner.scan(dirs, (done, total) ->
-                        Platform.runLater(() -> setStatus("status.scanning", done, total)));
+                        Platform.runLater(() -> setStatus("status.scanning", done, total)), part -> {
+                    if (pending.getAndSet(part) == null) {
+                        later.execute(() -> Platform.runLater(() -> {
+                            List<Clip> p = pending.getAndSet(null);
+                            if (p != null) {
+                                applyPartialScan(generation, p);
+                            }
+                        }));
+                    }
+                });
                 List<Session> grouped = new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
                 Platform.runLater(() -> applyScan(generation, clips, grouped));
             } catch (Exception e) {
@@ -461,37 +475,60 @@ public final class AppController {
         }
     }
 
-    private void applyScan(int generation, List<Clip> scanned, List<Session> scannedSessions) {
-        scanning.set(false);
-        // outputs still being written by this project's jobs are hidden; finished outputs are listed (they can be
-        // compressed next) but never selected automatically, so they do not slip into the next merge
-        java.util.Set<Path> unfinishedOutputs;
-        java.util.Set<Path> finishedOutputs;
+    /** Shows the clips probed so far while the scan is still running; the final result replaces them. */
+    private void applyPartialScan(int generation, List<Clip> scanned) {
+        if (generation != scanGeneration || !scanning.get()) {
+            return; // stale, or the final result has already been applied
+        }
+        List<Clip> fresh = withoutUnfinishedOutputs(scanned);
+        acceptClips(fresh);
+        // on a rescan the clips listed before stay until they are probed again, so the list does not shrink and
+        // grow back; clips not probed yet keep their selection (no retainAll until the scan is complete)
+        Set<Path> probed = new HashSet<>();
+        fresh.forEach(c -> probed.add(c.path()));
+        List<Clip> shown = new ArrayList<>(fresh);
+        for (Session s : sessions) {
+            for (Clip c : s.clips()) {
+                if (!probed.contains(c.path())) {
+                    shown.add(c);
+                }
+            }
+        }
+        sessions.setAll(new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(shown));
+        bumpSelection();
+    }
+
+    /** Outputs still being written by this project's jobs are never listed as clips. */
+    private List<Clip> withoutUnfinishedOutputs(List<Clip> scanned) {
+        Set<Path> unfinished;
         synchronized (project) {
-            unfinishedOutputs = project.getJobs().stream()
+            unfinished = project.getJobs().stream()
                     .filter(j -> j.output() != null && j.getState().unfinished())
                     .map(j -> Path.of(j.output())).collect(java.util.stream.Collectors.toSet());
+        }
+        return unfinished.isEmpty() ? scanned : scanned.stream().filter(c -> !unfinished.contains(c.path())).toList();
+    }
+
+    /**
+     * Selects newly found ready clips and deselects clips that cannot be used.
+     * Finished outputs of this project's jobs are listed (they can be compressed next) but never selected
+     * automatically, so they do not slip into the next merge.
+     *
+     * @return the number of clips still being copied
+     */
+    private int acceptClips(List<Clip> clips) {
+        Set<Path> finishedOutputs;
+        synchronized (project) {
             finishedOutputs = project.getJobs().stream()
                     .filter(j -> j.output() != null && !j.getState().unfinished())
                     .map(j -> Path.of(j.output())).collect(java.util.stream.Collectors.toSet());
         }
-        List<Clip> clips = scanned.stream().filter(c -> !unfinishedOutputs.contains(c.path())).toList();
-        List<Session> grouped = clips.size() == scanned.size() ? scannedSessions
-                : new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
-        if (generation != scanGeneration) {
-            // the project or its folders changed while scanning: these results are stale
-            rescanRequested = false;
-            rescan();
-            return;
-        }
-        Set<Path> present = new HashSet<>();
         int copying = 0;
         for (Clip c : clips) {
-            present.add(c.path());
-            String key = c.path().toString();
             boolean isNew;
             synchronized (project) {
-                isNew = c.selectable() && project.getSeenClips().add(key) && !finishedOutputs.contains(c.path());
+                isNew = c.selectable() && project.getSeenClips().add(c.path().toString())
+                        && !finishedOutputs.contains(c.path());
             }
             if (isNew) {
                 selected.add(c.path()); // newly found ready clips are selected by default
@@ -502,6 +539,25 @@ public final class AppController {
                     copying++;
                 }
             }
+        }
+        return copying;
+    }
+
+    private void applyScan(int generation, List<Clip> scanned, List<Session> scannedSessions) {
+        scanning.set(false);
+        List<Clip> clips = withoutUnfinishedOutputs(scanned);
+        List<Session> grouped = clips.size() == scanned.size() ? scannedSessions
+                : new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
+        if (generation != scanGeneration) {
+            // the project or its folders changed while scanning: these results are stale
+            rescanRequested = false;
+            rescan();
+            return;
+        }
+        int copying = acceptClips(clips);
+        Set<Path> present = new HashSet<>();
+        for (Clip c : clips) {
+            present.add(c.path());
         }
         selected.retainAll(present);
         sessions.setAll(grouped);

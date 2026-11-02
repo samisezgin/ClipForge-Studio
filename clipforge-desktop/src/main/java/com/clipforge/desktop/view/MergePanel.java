@@ -76,6 +76,7 @@ public final class MergePanel extends VBox {
         listeners.on(controller.selectionVersionProperty(), (o, a, b) -> updateSummary());
         listeners.on(controller.sessions(), c -> updateSummary());
         listeners.on(controller.toolsProperty(), (o, a, b) -> updateSummary());
+        listeners.on(controller.scanningProperty(), (o, a, b) -> updateSummary());
         updateSummary();
     }
 
@@ -86,6 +87,7 @@ public final class MergePanel extends VBox {
         boolean noFfmpeg = controller.toolsProperty().get() == null;
         summary.setText(noFfmpeg ? Messages.get("error.noFfmpeg")
                 : Messages.get("merge.summary", sel.size(), Formats.duration(d), Formats.size(bytes)));
-        mergeButton.setDisable(sel.isEmpty() || noFfmpeg);
+        // the list fills in while scanning; merging a half-scanned session would miss clips
+        mergeButton.setDisable(sel.isEmpty() || noFfmpeg || controller.scanningProperty().get());
     }
 }
