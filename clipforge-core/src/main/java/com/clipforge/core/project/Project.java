@@ -34,6 +34,16 @@ public final class Project {
     private boolean stepSpeed;
     private boolean stepCompress;
     private double speedFactor = 2;
+    /** Ask how to delete the sources when starting (the choice itself is made in a dialog, per start). */
+    private boolean deleteSources;
+
+    public boolean isDeleteSources() {
+        return deleteSources;
+    }
+
+    public void setDeleteSources(boolean deleteSources) {
+        this.deleteSources = deleteSources;
+    }
 
     public boolean isStepMerge() {
         return stepMerge;

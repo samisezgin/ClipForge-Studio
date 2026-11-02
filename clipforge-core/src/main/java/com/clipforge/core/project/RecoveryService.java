@@ -37,7 +37,9 @@ public final class RecoveryService {
         List<Issue> issues = new ArrayList<>();
         for (JobRecord job : project.getJobs()) {
             if (job.getState().unfinished()) {
-                List<String> changed = Stream.concat(job.getSources().stream(),
+                // sources deleted during the work at the user's request are gone on purpose
+                List<String> changed = Stream.concat(job.getSources().stream()
+                                        .filter(f -> !job.getDeletedSources().contains(f.path())),
                                 job.getMusicSources().stream())
                         .filter(f -> !f.matchesDisk()).map(Fingerprint::path).toList();
                 issues.add(new Issue(job, changed.isEmpty() ? Kind.INTERRUPTED : Kind.SOURCE_CHANGED, changed));
@@ -90,7 +92,7 @@ public final class RecoveryService {
     public static void acceptChangedSources(JobRecord job) throws IOException {
         List<Fingerprint> refreshed = new ArrayList<>();
         for (Fingerprint f : job.getSources()) {
-            refreshed.add(Fingerprint.of(Path.of(f.path())));
+            refreshed.add(job.getDeletedSources().contains(f.path()) ? f : Fingerprint.of(Path.of(f.path())));
         }
         job.setSources(refreshed);
         List<Fingerprint> music = new ArrayList<>();
@@ -103,6 +105,7 @@ public final class RecoveryService {
 
     /** {@code true} if one of the video sources (not only the music) changed. */
     public static boolean videoSourcesChanged(JobRecord job) {
-        return job.getSources().stream().anyMatch(f -> !f.matchesDisk());
+        return job.getSources().stream().filter(f -> !job.getDeletedSources().contains(f.path()))
+                .anyMatch(f -> !f.matchesDisk());
     }
 }

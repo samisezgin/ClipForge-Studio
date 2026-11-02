@@ -28,6 +28,36 @@ public final class JobRecord {
     private String errorKey;
     private List<String> errorArgs = new ArrayList<>();
     private String errorDetail;
+    /** Delete the sources during or after the job; {@code null} keeps them (default). */
+    private SourceDeletion sourceDeletion;
+    /** Sources already deleted (moved to the Recycle Bin or permanently); they are no longer checked or needed. */
+    private List<String> deletedSources = new ArrayList<>();
+    /** Sources that were to be deleted but were kept, e.g. still used by another job or changed meanwhile. */
+    private List<String> keptSources = new ArrayList<>();
+
+    public SourceDeletion getSourceDeletion() {
+        return sourceDeletion;
+    }
+
+    public void setSourceDeletion(SourceDeletion sourceDeletion) {
+        this.sourceDeletion = sourceDeletion;
+    }
+
+    public List<String> getDeletedSources() {
+        return deletedSources;
+    }
+
+    public void setDeletedSources(List<String> deletedSources) {
+        this.deletedSources = deletedSources == null ? new ArrayList<>() : new ArrayList<>(deletedSources);
+    }
+
+    public List<String> getKeptSources() {
+        return keptSources;
+    }
+
+    public void setKeptSources(List<String> keptSources) {
+        this.keptSources = keptSources == null ? new ArrayList<>() : new ArrayList<>(keptSources);
+    }
 
     public JobRecord() {
         // for Jackson

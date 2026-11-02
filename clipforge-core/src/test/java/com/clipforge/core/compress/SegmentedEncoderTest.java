@@ -10,12 +10,14 @@ import com.clipforge.core.job.JobExecutor;
 import com.clipforge.core.job.JobQueue;
 import com.clipforge.core.model.MediaInfo;
 import com.clipforge.core.mp4.FragmentedMp4;
+import com.clipforge.core.project.Fingerprint;
 import com.clipforge.core.project.JobRecord;
 import com.clipforge.core.project.JobState;
 import com.clipforge.core.project.JobType;
 import com.clipforge.core.project.Project;
 import com.clipforge.core.project.ProjectStore;
 import com.clipforge.core.project.RecoveryService;
+import com.clipforge.core.project.SourceDeletion;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,9 +30,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -213,6 +217,82 @@ class SegmentedEncoderTest {
         q2.start();
         assertTrue(q2.awaitIdle(Duration.ofMinutes(3)));
         assertFinished(again);
+    }
+
+    private List<Path> twoClips(String folder) throws Exception {
+        Path dir = Files.createDirectories(tmp.resolve(folder));
+        Path a = FfmpegTestSupport.makeClip(tools, dir.resolve("a.mp4"), 6, "320x180");
+        Path b = FfmpegTestSupport.makeClip(tools, dir.resolve("b.mp4"), 6, "320x180");
+        return List.of(a, b);
+    }
+
+    private JobRecord jobFor(List<Path> clips, SourceDeletion deletion, String outName) throws Exception {
+        ProbeService probe = new ProbeService(tools);
+        List<CompressInput> inputs = new ArrayList<>();
+        List<Fingerprint> fps = new ArrayList<>();
+        long ms = 0;
+        long bytes = 0;
+        for (Path c : clips) {
+            MediaInfo m = probe.probe(c).orElseThrow();
+            inputs.add(CompressInput.of(c, m));
+            fps.add(Fingerprint.of(c));
+            ms += m.duration().toMillis();
+            bytes += Files.size(c);
+        }
+        CompressOptions o = new CompressOptions(profile, profile.defaultQuality(), 2, 1, AudioMode.KEEP);
+        Path out = Files.createDirectories(tmp.resolve("out-" + outName)).resolve(outName + ".mp4");
+        JobRecord job = JobRecord.compress(new CompressSpec(inputs, out.toString(), o, ms, bytes, true), fps,
+                Clock.systemUTC().instant());
+        job.setSourceDeletion(deletion);
+        return job;
+    }
+
+    @Test
+    void deletesEachSourceDuringTheWorkOnceItIsInTheOutput() throws Exception {
+        List<Path> clips = twoClips("delete-during");
+        JobRecord job = jobFor(clips, new SourceDeletion(SourceDeletion.When.DURING, true), "during");
+        List<String> order = new CopyOnWriteArrayList<>();
+        JobQueue q = new JobQueue(project, Map.<JobType, JobExecutor>of(JobType.COMPRESS, new SegmentedEncoder(tools)),
+                () -> { }, new Noop(), Clock.systemUTC(), (file, permanent) -> {
+                    // when the first clip goes, the second one is still being encoded
+                    order.add(file.getFileName() + (job.getState() == JobState.RUNNING ? ":running" : ":after")
+                            + (permanent ? ":permanent" : ":bin") + ":" + Files.exists(clips.get(1)));
+                    Files.delete(file);
+                    return true;
+                });
+        q.submit(List.of(job));
+        assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
+        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals("a.mp4:running:permanent:true", order.get(0), String.valueOf(order));
+        assertEquals(2, order.size(), String.valueOf(order));
+        assertTrue(clips.stream().noneMatch(Files::exists), "both sources deleted");
+        assertEquals(2, job.getDeletedSources().size());
+        assertEquals(360, frames(Path.of(job.output())), "output complete although the sources are gone");
+    }
+
+    @Test
+    void deletesAfterTheJobButKeepsSourcesOtherJobsNeed() throws Exception {
+        List<Path> clips = twoClips("delete-after");
+        JobRecord job = jobFor(clips, new SourceDeletion(SourceDeletion.When.AFTER, false), "after");
+        // another (paused) job still needs the second clip
+        JobRecord other = jobFor(List.of(clips.get(1)), null, "other");
+        other.setState(JobState.PAUSED);
+        project.getJobs().add(other);
+        List<String> removed = new CopyOnWriteArrayList<>();
+        JobQueue q = new JobQueue(project, Map.<JobType, JobExecutor>of(JobType.COMPRESS, new SegmentedEncoder(tools)),
+                () -> { }, new Noop(), Clock.systemUTC(), (file, permanent) -> {
+                    assertFalse(permanent, "Recycle Bin by default");
+                    assertTrue(Files.exists(Path.of(job.output())), "output finished before deleting");
+                    removed.add(file.getFileName().toString());
+                    Files.delete(file);
+                    return true;
+                });
+        q.submit(List.of(job));
+        assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
+        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals(List.of("a.mp4"), removed);
+        assertTrue(Files.exists(clips.get(1)), "kept: the paused job needs it");
+        assertEquals(List.of(clips.get(1).toAbsolutePath().toString()), job.getKeptSources());
     }
 
     /** Source with a 1.4 s start offset and B-frames, plus a second clip: the reviewers' failure cases. */

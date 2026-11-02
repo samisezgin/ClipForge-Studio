@@ -37,6 +37,8 @@ public final class PipelinePanel extends VBox {
     private final CheckBox merge = new CheckBox(Messages.get("pipeline.merge"));
     private final CheckBox speed = new CheckBox(Messages.get("pipeline.speed"));
     private final CheckBox compress = new CheckBox(Messages.get("pipeline.compress"));
+    /** How and when is asked on Start; here only whether. */
+    private final CheckBox deleteSources = new CheckBox(Messages.get("pipeline.delete"));
     private final RadioButton fromSelection = new RadioButton(Messages.get("compress.source.selection"));
     private final RadioButton fromFile = new RadioButton(Messages.get("compress.source.file"));
     private final TextField file = new TextField();
@@ -60,6 +62,13 @@ public final class PipelinePanel extends VBox {
             c.selectedProperty().addListener((o, a, b) -> saveSteps());
         }
         FlowPane steps = new FlowPane(16, 6, merge, speed, compress);
+        deleteSources.setTooltip(new Tooltip(Messages.get("pipeline.delete.tip")));
+        deleteSources.selectedProperty().addListener((o, a, b) -> {
+            if (!loading) {
+                controller.setDeleteSources(b);
+            }
+            update();
+        });
 
         ToggleGroup source = new ToggleGroup();
         fromSelection.setToggleGroup(source);
@@ -87,7 +96,7 @@ public final class PipelinePanel extends VBox {
         start.setMaxWidth(Double.MAX_VALUE);
         start.setOnAction(e -> onStart.run());
 
-        getChildren().addAll(title, steps, fromSelection, fromFile, fileRow, summary, note, start);
+        getChildren().addAll(title, steps, deleteSources, fromSelection, fromFile, fileRow, summary, note, start);
 
         listeners.on(controller.projectVersionProperty(), (o, a, b) -> load());
         listeners.on(controller.selectionVersionProperty(), (o, a, b) -> update());
@@ -105,6 +114,7 @@ public final class PipelinePanel extends VBox {
             merge.setSelected(controller.stepMerge());
             speed.setSelected(controller.stepSpeed());
             compress.setSelected(controller.stepCompress());
+            deleteSources.setSelected(controller.deleteSources());
             fromFile.setSelected(controller.compressFromFile());
             fromSelection.setSelected(!controller.compressFromFile());
             file.setText(controller.compressFile() == null ? "" : controller.compressFile());
@@ -173,6 +183,9 @@ public final class PipelinePanel extends VBox {
         }
         if (doCompress) {
             parts.add(Messages.get("pipeline.step.compress"));
+        }
+        if (deleteSources.isSelected() && !parts.isEmpty()) {
+            parts.add(Messages.get("pipeline.step.delete"));
         }
         String what;
         if (onFile) {

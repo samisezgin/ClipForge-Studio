@@ -38,6 +38,7 @@ import com.clipforge.core.project.JobType;
 import com.clipforge.core.project.Project;
 import com.clipforge.core.project.ProjectStore;
 import com.clipforge.core.project.RecoveryService;
+import com.clipforge.core.project.SourceDeletion;
 import com.clipforge.core.scan.ClipScanner;
 import com.clipforge.core.scan.SessionGrouper;
 import com.clipforge.core.scan.TimestampResolver;
@@ -907,6 +908,19 @@ public final class AppController {
         scheduleSave();
     }
 
+    /** "Delete source files" ticked: the start asks how (during/after, Recycle Bin/permanent). */
+    public boolean deleteSources() {
+        return project.isDeleteSources();
+    }
+
+    public void setDeleteSources(boolean delete) {
+        synchronized (project) {
+            project.setDeleteSources(delete);
+        }
+        bumpPipeline();
+        scheduleSave();
+    }
+
     public double speedFactor() {
         return project.getSpeedFactor();
     }
@@ -1107,11 +1121,19 @@ public final class AppController {
         if (queue == null) {
             throw new IOException(Messages.get("error.noFfmpeg"));
         }
-        submitCompress(createCompressJobs(specs));
+        submitCompress(createCompressJobs(specs, null));
     }
 
-    /** Fingerprints the sources in the background, then queues the jobs on the FX thread. */
     public void startCompressAsync(List<CompressSpec> specs, Consumer<String> failed) {
+        startCompressAsync(specs, null, failed);
+    }
+
+    /**
+     * Fingerprints the sources in the background, then queues the jobs on the FX thread.
+     *
+     * @param deletion delete the sources during or after the work, or {@code null} to keep them
+     */
+    public void startCompressAsync(List<CompressSpec> specs, SourceDeletion deletion, Consumer<String> failed) {
         if (queue == null) {
             failed.accept(Messages.get("error.noFfmpeg"));
             return;
@@ -1119,7 +1141,7 @@ public final class AppController {
         Project origin = project;
         Thread.ofVirtual().start(() -> {
             try {
-                List<JobRecord> jobs = createCompressJobs(specs);
+                List<JobRecord> jobs = createCompressJobs(specs, deletion);
                 Platform.runLater(() -> {
                     if (project != origin) {
                         return;
@@ -1133,7 +1155,8 @@ public final class AppController {
         });
     }
 
-    private List<JobRecord> createCompressJobs(List<CompressSpec> specs) throws IOException {
+    private List<JobRecord> createCompressJobs(List<CompressSpec> specs, SourceDeletion deletion)
+            throws IOException {
         List<JobRecord> created = new ArrayList<>();
         for (CompressSpec s : specs) {
             List<Fingerprint> fps = new ArrayList<>();
@@ -1142,6 +1165,7 @@ public final class AppController {
             }
             JobRecord job = JobRecord.compress(s, fps, clock.instant());
             job.setMusicSources(musicFingerprints(s.options().audio(), s.options().music()));
+            job.setSourceDeletion(deletion);
             created.add(job);
         }
         return created;
@@ -1256,6 +1280,11 @@ public final class AppController {
     }
 
     public void startMerge(List<MergeSpec> specs) throws IOException {
+        startMerge(specs, null);
+    }
+
+    /** @param deletion delete the sources after the merge, or {@code null} to keep them */
+    public void startMerge(List<MergeSpec> specs, SourceDeletion deletion) throws IOException {
         List<JobRecord> created = new ArrayList<>();
         for (MergeSpec s : specs) {
             List<Fingerprint> fps = new ArrayList<>();
@@ -1264,6 +1293,9 @@ public final class AppController {
             }
             JobRecord job = JobRecord.merge(s, fps, clock.instant());
             job.setMusicSources(musicFingerprints(s.options().audio(), s.options().music()));
+            // a lossless merge is one FFmpeg run: its sources can only go after it
+            job.setSourceDeletion(deletion == null ? null : new SourceDeletion(SourceDeletion.When.AFTER,
+                    deletion.permanent()));
             created.add(job);
         }
         if (queue == null) {

@@ -5,6 +5,7 @@ import com.clipforge.core.ClipForge;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.project.ProjectStore;
 import com.clipforge.core.project.RecoveryService;
+import com.clipforge.core.project.SourceDeletion;
 import com.clipforge.desktop.AppController;
 import com.clipforge.desktop.AppSettings;
 import javafx.application.HostServices;
@@ -54,6 +55,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 /** Main window layout: menu, toolbar, folder chips, clip tree + merge panel, job queue, status bar. */
@@ -357,7 +359,19 @@ public final class MainView {
                 error(Messages.get("compress.error.title"), Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
                 return;
             }
-            controller.startCompressAsync(plan.specs(), msg -> error(Messages.get("compress.error.title"), msg));
+            SourceDeletion deletion = null;
+            if (controller.deleteSources()) {
+                List<Path> files = plan.specs().stream().flatMap(s -> s.inputs().stream()).distinct()
+                        .map(Path::of).toList();
+                Optional<SourceDeletion> d = DeleteSourcesDialog.ask(stage, files, true);
+                if (d.isEmpty()) {
+                    controller.setStatus("status.ready"); // the user changed their mind: nothing starts
+                    return;
+                }
+                deletion = d.get();
+            }
+            controller.startCompressAsync(plan.specs(), deletion,
+                    msg -> error(Messages.get("compress.error.title"), msg));
         });
     }
 
@@ -388,8 +402,19 @@ public final class MainView {
             error(Messages.get("merge.error.title"), Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
             return;
         }
+        SourceDeletion deletion = null;
+        if (controller.deleteSources()) {
+            List<Path> files = plan.specs().stream().flatMap(s -> s.inputs().stream()).distinct()
+                    .map(Path::of).toList();
+            // a lossless merge is a single FFmpeg run: its sources can only be deleted afterwards
+            Optional<SourceDeletion> d = DeleteSourcesDialog.ask(stage, files, false);
+            if (d.isEmpty()) {
+                return; // the user changed their mind: nothing starts
+            }
+            deletion = d.get();
+        }
         try {
-            controller.startMerge(plan.specs());
+            controller.startMerge(plan.specs(), deletion);
             controller.setStatus("status.mergeQueued", plan.specs().size());
         } catch (IOException e) {
             error(Messages.get("merge.error.title"), Messages.get("error.io", e.getMessage()));

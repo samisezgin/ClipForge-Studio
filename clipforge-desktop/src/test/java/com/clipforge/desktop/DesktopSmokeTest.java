@@ -9,10 +9,14 @@ import com.clipforge.core.ffmpeg.FfmpegTools;
 import com.clipforge.core.ffmpeg.ProbeService;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.project.JobState;
+import com.clipforge.core.project.SourceDeletion;
+import com.clipforge.desktop.view.DeleteSourcesDialog;
 import com.clipforge.desktop.view.MainView;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Scene;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TabPane;
@@ -37,12 +41,14 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.prefs.Preferences;
 import java.util.zip.CRC32;
 import java.util.zip.DeflaterOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -223,6 +229,32 @@ class DesktopSmokeTest {
             });
             Thread.sleep(300);
             snapshot(stageRef[0], OUT.resolve("ui-compress-en.png"));
+            // the delete dialog: Recycle Bin by default, a red warning only for a permanent deletion
+            var dialogRef = new AtomicReference<Dialog<
+                    SourceDeletion>>();
+            onFx(() -> {
+                List<Path> files;
+                try (var s = Files.list(folder)) {
+                    files = s.filter(f -> f.toString().endsWith(".mp4")).toList();
+                }
+                var d = DeleteSourcesDialog.create(stageRef[0], files, true);
+                dialogRef.set(d);
+                d.show();
+                var warning = d.getDialogPane().lookup(".delete-warning");
+                assertFalse(warning.isVisible(), "no warning for the Recycle Bin");
+                var permanent = (CheckBox) d.getDialogPane().lookupAll(".check-box").iterator().next();
+                permanent.setSelected(true);
+                assertTrue(warning.isVisible(), "warning for a permanent deletion");
+                return null;
+            });
+            Thread.sleep(300);
+            snapshot((Stage) dialogRef.get().getDialogPane().getScene().getWindow(), OUT.resolve("ui-delete-en.png"));
+            onFx(() -> {
+                dialogRef.get().setResult(null);
+                dialogRef.get().close();
+                assertTrue(dialogRef.get().getResult() == null, "cancel starts nothing");
+                return null;
+            });
             onFx(() -> {
                 // scrolled to the bottom, the last line of the compress tab must be inside the visible area
                 var side = sideScroll(stageRef[0]);

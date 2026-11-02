@@ -42,7 +42,7 @@
                 <configuration>
                     <mainClass>com.clipforge.desktop/com.clipforge.desktop.ClipForgeApp</mainClass>
                     <options>
-                        <option>--enable-native-access=javafx.graphics</option>
+                        <option>--enable-native-access=javafx.graphics,com.clipforge.core</option>
                     </options>
                 </configuration>
             </plugin>

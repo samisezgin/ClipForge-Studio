@@ -102,6 +102,12 @@ public final class SegmentedEncoder implements JobExecutor {
             }
         }
         ctx.save();
+        // a source deleted during the work (at the user's request) cannot be encoded again, e.g. after the output
+        // was damaged: say so instead of an FFmpeg "file not found"
+        String missing = missingDeletedSource(job, state);
+        if (missing != null) {
+            return fail(job, ctx, "error.sourceDeleted", null, Path.of(missing).getFileName().toString());
+        }
 
         Outcome space = checkSpace(job, ctx, state, out, false);
         if (space != null) {
@@ -132,6 +138,25 @@ public final class SegmentedEncoder implements JobExecutor {
     @Override
     public void discard(JobRecord job) {
         CompressRecovery.discard(job);
+    }
+
+    /** A source that is still needed (not all its segments appended, or the audio not ready) but was deleted. */
+    private static String missingDeletedSource(JobRecord job, CompressState state) {
+        CompressSpec spec = state.getSpec();
+        for (int i = 0; i < spec.sources().size(); i++) {
+            String path = spec.sources().get(i).path();
+            if (!job.getDeletedSources().contains(path) || Files.exists(Path.of(path))) {
+                continue;
+            }
+            int input = i;
+            boolean needed = (keepsAudio(spec) && !state.isAudioReady())
+                    || state.getSegments().stream().anyMatch(s -> s.getInput() == input
+                    && s.getState() != SegmentState.APPENDED);
+            if (needed) {
+                return path;
+            }
+        }
+        return null;
     }
 
     /** Whether the output gets an audio track: the original one, or background music. */
@@ -339,6 +364,17 @@ public final class SegmentedEncoder implements JobExecutor {
             }
             ctx.save(); // committed point persisted before the temp file disappears
             Files.deleteIfExists(temp);
+            int input = next.getInput();
+            boolean sourceComplete;
+            synchronized (ctx.lock()) {
+                // every part of this source is committed, and the audio (taken from all sources) is ready
+                sourceComplete = state.getSegments().stream().filter(s -> s.getInput() == input)
+                        .allMatch(s -> s.getState() == SegmentState.APPENDED)
+                        && (!keepsAudio(spec) || state.isAudioReady());
+            }
+            if (sourceComplete) {
+                ctx.sourceDone(spec.sources().get(input).path());
+            }
         }
     }
 

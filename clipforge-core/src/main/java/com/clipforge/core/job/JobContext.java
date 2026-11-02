@@ -31,4 +31,11 @@ public interface JobContext {
     Object lock();
 
     Clock clock();
+
+    /**
+     * The job no longer needs this source: its part of the output is written and committed. With "delete during the
+     * work" the queue deletes it now (if no other job still needs it). Call without holding {@link #lock()}.
+     */
+    default void sourceDone(String path) {
+    }
 }
