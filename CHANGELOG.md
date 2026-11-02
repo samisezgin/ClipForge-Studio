@@ -7,6 +7,10 @@ each development phase is a minor release.
 
 ## [1.2.0] - 2026-11-03
 ### Added
+- **Free merge** (Merge tab): join any selected videos into one file in the order you set (up/down, by time, by
+  name), whatever their camera, date or format. Videos of the same format are copied losslessly; different formats are
+  re-encoded to the first video's resolution and frame rate (aspect kept with black borders, silence for videos
+  without sound, one colour format), close to the source quality unless Compress is ticked.
 - **Delete source files** (steps panel): on Start a dialog asks whether to delete the sources during the work
   (each source as soon as its part is safely in the output; re-encoding jobs only) or after the work (once the output
   is checked), and whether to move them to the Recycle Bin (default) or delete them permanently, with a prominent

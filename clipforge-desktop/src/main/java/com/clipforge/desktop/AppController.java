@@ -68,9 +68,11 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -732,6 +734,62 @@ public final class AppController {
         scheduleSave();
     }
 
+    // ------------------------------------------------------------------ free merge order
+
+    /** The user's order for a free merge. */
+    public List<Path> mergeOrder() {
+        synchronized (project) {
+            return project.getMergeOrder().stream().map(Path::of).toList();
+        }
+    }
+
+    /** The selected clips in the order a free merge joins them. */
+    public List<Clip> orderedSelection() {
+        return MergePlanner.ordered(List.copyOf(sessions), Set.copyOf(selected), mergeOrder());
+    }
+
+    /** Moves a clip up ({@code -1}) or down ({@code +1}) in the free merge order. */
+    public void moveInOrder(Clip clip, int delta) {
+        List<Clip> list = new ArrayList<>(orderedSelection());
+        int i = list.indexOf(clip);
+        int j = i + delta;
+        if (i < 0 || j < 0 || j >= list.size()) {
+            return;
+        }
+        list.set(i, list.get(j));
+        list.set(j, clip);
+        setMergeOrder(list);
+    }
+
+    /** Sorts the free merge order by file name ({@code true}) or by recording time. */
+    public void sortOrder(boolean byName) {
+        List<Clip> list = new ArrayList<>(orderedSelection());
+        list.sort(byName ? Comparator.comparing((Clip c) -> c.fileName().toLowerCase(Locale.ROOT))
+                : Comparator.comparing(Clip::start).thenComparingLong(Clip::sequence));
+        setMergeOrder(list);
+    }
+
+    private void setMergeOrder(List<Clip> list) {
+        synchronized (project) {
+            project.setMergeOrder(list.stream().map(c -> c.path().toString()).toList());
+        }
+        bumpPipeline();
+        bumpSelection();
+        scheduleSave();
+    }
+
+    /**
+     * A free merge of videos that differ in format cannot be copied losslessly: it is encoded instead (close to the
+     * source quality unless Compress is ticked).
+     */
+    public boolean freeMergeNeedsEncoding() {
+        if (project.getMergeMode() != MergeMode.FREE || project.isCompressFromFile()) {
+            return false;
+        }
+        List<Clip> clips = orderedSelection();
+        return clips.size() > 1 && !MergePlanner.compatible(clips);
+    }
+
     public MergeOptions mergeOptions() {
         return project.getMergeOptions();
     }
@@ -990,7 +1048,22 @@ public final class AppController {
             return RunKind.ENCODE;
         }
         // a single file has nothing to merge
-        return project.isStepMerge() && !project.isCompressFromFile() ? RunKind.MERGE : RunKind.NONE;
+        if (!project.isStepMerge() || project.isCompressFromFile()) {
+            return RunKind.NONE;
+        }
+        // a free merge of mixed formats cannot be copied: it is encoded
+        return freeMergeNeedsEncoding() ? RunKind.ENCODE : RunKind.MERGE;
+    }
+
+    /**
+     * An encoding run compresses when Compress is ticked; a speed-up alone, or a free merge of mixed formats, keeps
+     * the picture close to the source.
+     */
+    private boolean compressing() {
+        if (project.isStepCompress()) {
+            return true;
+        }
+        return !project.isStepSpeed() && !freeMergeNeedsEncoding();
     }
 
     /**
@@ -998,11 +1071,6 @@ public final class AppController {
      * re-encode too, but keeps the picture close to the source (top of the "indistinguishable" range) instead of
      * aiming for a small file.
      */
-    /** An encoding run compresses unless it is a speed-up alone. */
-    private boolean compressing() {
-        return project.isStepCompress() || !project.isStepSpeed();
-    }
-
     private CompressOptions runOptions(boolean compress) {
         CompressOptions o = compressOptions();
         if (o == null) {
@@ -1051,7 +1119,7 @@ public final class AppController {
         CompressInputs in = new CompressInputs(tools.get(), runOptions(forSample || compressing()),
                 project.getOutputDir(), project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions),
                 Set.copyOf(selected), project.getMergeMode(), project.getMergeOptions(), reservedOutputs(),
-                selectedClips().isEmpty(), project.isStepMerge());
+                selectedClips().isEmpty(), project.isStepMerge(), mergeOrder());
         Project origin = project;
         Thread.ofVirtual().start(() -> {
             CompressPlan plan;
@@ -1078,7 +1146,7 @@ public final class AppController {
     private record CompressInputs(FfmpegTools tools, CompressOptions options, String outputDir, boolean fromFile,
                                   String file, List<Session> sessions, Set<Path> selected, MergeMode mode,
                                   MergeOptions mergeOptions, List<Path> reserved, boolean nothingSelected,
-                                  boolean join) {
+                                  boolean join, List<Path> order) {
     }
 
     /** Synchronous planning on the current thread (tests). */
@@ -1091,7 +1159,7 @@ public final class AppController {
         return planCompress(new CompressInputs(tools.get(), runOptions(compressing()), project.getOutputDir(),
                 project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions), Set.copyOf(selected),
                 project.getMergeMode(), project.getMergeOptions(), reservedOutputs(), selectedClips().isEmpty(),
-                project.isStepMerge()));
+                project.isStepMerge(), mergeOrder()));
     }
 
     private static CompressPlan planCompress(CompressInputs in) {
@@ -1133,7 +1201,11 @@ public final class AppController {
                 Map<Path, Clip> byPath = new HashMap<>();
                 in.sessions().forEach(s -> s.clips().forEach(c -> byPath.put(c.path(), c)));
                 List<List<Clip>> groups = new ArrayList<>();
-                if (in.join()) {
+                boolean free = in.join() && in.mode() == MergeMode.FREE;
+                if (free) {
+                    // free merge: all selected videos in the user's order, any formats
+                    groups.add(MergePlanner.ordered(in.sessions(), in.selected(), in.order()));
+                } else if (in.join()) {
                     // joined like a merge: per session or all in one, while encoding (no intermediate file)
                     for (MergeSpec m : MergePlanner.plan(in.sessions(), in.selected(), in.mode(), outDir,
                             in.mergeOptions(), reserved)) {
@@ -1148,7 +1220,7 @@ public final class AppController {
                 for (List<Clip> clips : groups) {
                     List<Path> taken = new ArrayList<>(reserved);
                     specs.forEach(s -> taken.add(Path.of(s.output())));
-                    specs.add(CompressPlanner.forClips(clips, outDir, o, taken));
+                    specs.add(CompressPlanner.forClips(clips, outDir, o, taken, free));
                 }
             }
             // the growing output and the final file coexist for a moment: plan for twice a conservative estimate
@@ -1311,7 +1383,7 @@ public final class AppController {
                         .map(j -> Path.of(j.output())).toList();
             }
             List<MergeSpec> specs = MergePlanner.plan(sessions, selected, project.getMergeMode(), outDir,
-                    project.getMergeOptions().withAudio(project.getAudioMode(), project.getMusic()), reserved);
+                    project.getMergeOptions().withAudio(project.getAudioMode(), project.getMusic()), reserved, mergeOrder());
             long total = specs.stream().mapToLong(MergeSpec::totalBytes).sum();
             long largest = specs.stream().mapToLong(MergeSpec::totalBytes).max().orElse(0);
             DiskCheck.Result disk = DiskCheck.check(outDir, total, largest);

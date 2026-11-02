@@ -56,7 +56,25 @@ public final class CompressPlanner {
      */
     public static CompressSpec forClips(List<Clip> clips, Path outputDir, CompressOptions options,
                                         Collection<Path> reserved) throws IncompatibleClipsException {
-        MergePlanner.requireCompatible(clips);
+        return forClips(clips, outputDir, options, reserved, false);
+    }
+
+    /**
+     * @param anyFormat join videos of different formats (free merge): they are brought to the resolution and frame
+     *                  rate of the first clip; without it, the clips must share a format
+     */
+    public static CompressSpec forClips(List<Clip> clips, Path outputDir, CompressOptions options,
+                                        Collection<Path> reserved, boolean anyFormat)
+            throws IncompatibleClipsException {
+        CompressSpec.Normalize normalize = null;
+        if (!anyFormat || MergePlanner.compatible(clips)) {
+            MergePlanner.requireCompatible(clips);
+        } else {
+            MediaInfo first = clips.getFirst().media();
+            double fps = first.frameRate() > 1 ? Math.round(first.frameRate() * 1000) / 1000.0 : 30;
+            // even sizes: 4:2:0 needs them
+            normalize = new CompressSpec.Normalize(first.width() / 2 * 2, first.height() / 2 * 2, fps);
+        }
         String base = OutputNaming.baseName(clips, tag(options), "mp4");
         Path out = OutputNaming.unique(outputDir, base, reserved);
         return new CompressSpec(clips.stream().map(c -> CompressInput.of(c.path(), c.media(),
@@ -64,6 +82,9 @@ public final class CompressPlanner {
                 out.toString(), options,
                 clips.stream().mapToLong(c -> c.duration().toMillis()).sum(),
                 clips.stream().mapToLong(Clip::size).sum(),
-                clips.stream().allMatch(c -> c.media().hasAudio()));
+                // a normalised join keeps sound when any clip has some (silence fills the others)
+                normalize != null ? clips.stream().anyMatch(c -> c.media().hasAudio())
+                        : clips.stream().allMatch(c -> c.media().hasAudio()),
+                normalize);
     }
 }

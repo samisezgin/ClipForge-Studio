@@ -13,9 +13,16 @@ import java.nio.file.Path;
  * @param audioStartUs {@code start_time} of the audio stream in microseconds
  * @param frameRate    average frame rate, for progress reporting
  * @param startEpochMs wall-clock time the recording started (for the date/time overlay), 0 if unknown
+ * @param hasAudio     the file has an audio track (a free merge fills silence for the ones without)
  */
 public record CompressInput(String path, long durationMs, long videoStartUs, long audioStartUs, double frameRate,
-                            long startEpochMs) {
+                            long startEpochMs, boolean hasAudio) {
+
+    /** Before 1.2 every joined source had audio, or none had (they had to share a format). */
+    public CompressInput(String path, long durationMs, long videoStartUs, long audioStartUs, double frameRate,
+                         long startEpochMs) {
+        this(path, durationMs, videoStartUs, audioStartUs, frameRate, startEpochMs, true);
+    }
 
     public static CompressInput of(Path path, MediaInfo m) {
         return of(path, m, 0);
@@ -23,6 +30,7 @@ public record CompressInput(String path, long durationMs, long videoStartUs, lon
 
     public static CompressInput of(Path path, MediaInfo m, long startEpochMs) {
         return new CompressInput(path.toAbsolutePath().toString(), m.duration().toMillis(),
-                m.videoStart().toNanos() / 1000, m.audioStart().toNanos() / 1000, m.frameRate(), startEpochMs);
+                m.videoStart().toNanos() / 1000, m.audioStart().toNanos() / 1000, m.frameRate(), startEpochMs,
+                m.hasAudio());
     }
 }

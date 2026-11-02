@@ -436,12 +436,26 @@ public final class SegmentedEncoder implements JobExecutor {
                 LOG.warning("No font found for the date/time overlay; encoding without it");
             }
         }
-        double fps = in.frameRate() > 0 ? in.frameRate() : 30;
+        CompressSpec.Normalize norm = spec.normalize();
+        // output frame rate: the common one of a free merge, otherwise the source's own
+        double fps = norm != null ? norm.fps() : in.frameRate() > 0 ? in.frameRate() : 30;
         CompressOptions o = spec.options();
         if (o.spedUp()) {
-            // after the overlay, so the stamp keeps showing the real recording time; fps drops the surplus frames
-            // so the output keeps the source frame rate (and the encoder only sees the frames that are kept)
-            vf += String.format(Locale.ROOT, ",setpts=(PTS-STARTPTS)/%s,fps=%.3f", o.speed(), fps);
+            // after the overlay, so the stamp keeps showing the real recording time
+            vf += String.format(Locale.ROOT, ",setpts=(PTS-STARTPTS)/%s", o.speed());
+        }
+        if (norm != null) {
+            // videos of different formats in one file: same size (aspect kept, black borders), pixel format
+            // and one colour description (BT.709, limited range): the encoder writes it into every segment's header,
+            // which must match for the segments to be appended
+            vf += String.format(Locale.ROOT, ",scale=%d:%d:force_original_aspect_ratio=decrease:"
+                    + "out_color_matrix=bt709:out_range=limited,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,"
+                    + "format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+                    norm.width(), norm.height(), norm.width(), norm.height());
+        }
+        if (o.spedUp() || norm != null) {
+            // fps drops (or repeats) frames to the output rate, so every segment has the same rhythm
+            vf += String.format(Locale.ROOT, ",fps=%.3f", fps);
         }
         // the filter graph goes through a file: its quoting does not survive every command-line parser
         Path vfFile = temp.resolveSibling(s.fileName() + ".vf.txt");
@@ -535,6 +549,9 @@ public final class SegmentedEncoder implements JobExecutor {
 
     private Outcome extractOriginal(JobRecord job, JobContext ctx, CompressSpec spec, Path work, Path audio)
             throws IOException {
+        if (spec.normalize() != null) {
+            return joinNormalizedAudio(job, ctx, spec, work, audio);
+        }
         List<String> input = audioInputArgs(spec, work);
         double speed = spec.options().speed();
         // sped-up sound has to be re-encoded; atempo keeps the pitch
@@ -571,6 +588,59 @@ public final class SegmentedEncoder implements JobExecutor {
         return null;
     }
 
+    /**
+     * Audio of a free merge: the sources' tracks may differ (codec, rate, channels) or be missing. Each source gives
+     * exactly its own length (cut or padded with silence, or silence when it has no audio), resampled to 48 kHz
+     * stereo, so the joined track stays in step with the joined video.
+     */
+    private Outcome joinNormalizedAudio(JobRecord job, JobContext ctx, CompressSpec spec, Path work, Path audio)
+            throws IOException {
+        List<String> cmd = new ArrayList<>(List.of(tools.ffmpeg().toString()));
+        StringBuilder graph = new StringBuilder();
+        StringBuilder concat = new StringBuilder();
+        int inputs = 0;
+        for (int i = 0; i < spec.sources().size(); i++) {
+            CompressInput in = spec.sources().get(i);
+            String d = seconds(in.durationMs() / 1000.0);
+            if (in.hasAudio()) {
+                cmd.addAll(List.of("-vn", "-i", in.path()));
+                graph.append(String.format(Locale.ROOT, "[%d:a:0]aresample=48000,aformat=sample_fmts=fltp:"
+                        + "channel_layouts=stereo,apad=whole_dur=%s,atrim=0:%s,asetpts=N/SR/TB[a%d];", inputs, d, d, i));
+                inputs++;
+            } else {
+                graph.append(String.format(Locale.ROOT, "anullsrc=r=48000:cl=stereo,atrim=0:%s,aformat="
+                        + "sample_fmts=fltp,asetpts=N/SR/TB[a%d];", d, i));
+            }
+            concat.append("[a").append(i).append(']');
+        }
+        graph.append(concat).append("concat=n=").append(spec.sources().size()).append(":v=0:a=1");
+        if (spec.options().spedUp()) {
+            graph.append(",atempo=").append(CompressOptions.formatSpeed(spec.options().speed()));
+        }
+        graph.append("[out]");
+        Path graphFile = work.resolve("audio_join.txt");
+        Files.writeString(graphFile, graph.toString(), StandardCharsets.UTF_8);
+        cmd.addAll(List.of("-/filter_complex", graphFile.toString(), "-map", "[out]", "-c:a", "aac", "-b:a", "192k",
+                "-f", "mp4", "-y", audio.toString()));
+        CancellationToken token = new CancellationToken();
+        ctx.track(token);
+        try {
+            FfmpegResult r = FfmpegProcess.run(cmd, Duration.ofMillis(spec.totalDurationMs()), null, token);
+            if (r.cancelled()) {
+                Files.deleteIfExists(audio);
+                return ctx.cancelRequested() ? cancelAndClean(job, spec) : Outcome.PAUSED;
+            }
+            if (!r.success()) {
+                Files.deleteIfExists(audio);
+                return fail(job, ctx, "error.ffmpeg", tail(r), String.valueOf(r.exitCode()));
+            }
+            return null;
+        } finally {
+            ctx.untrack(token);
+            Files.deleteIfExists(graphFile);
+        }
+    }
+
     private Outcome finish(JobRecord job, JobContext ctx, CompressState state, Path part, Path work, Path out)
             throws IOException {
         CompressSpec spec = state.getSpec();
@@ -599,7 +669,8 @@ public final class SegmentedEncoder implements JobExecutor {
         // keep the source's offset between video and audio start (both tracks start at 0 in our files);
         // background music simply starts with the video
         CompressInput first = spec.sources().getFirst();
-        double avOffset = spec.options().audio() == AudioMode.KEEP
+        // a normalised join builds its audio from each source's full length: no offset to keep
+        double avOffset = spec.options().audio() == AudioMode.KEEP && spec.normalize() == null
                 ? (first.videoStartUs() - first.audioStartUs()) / 1e6 / spec.options().speed() : 0;
         List<String> cmd = new ArrayList<>(List.of(tools.ffmpeg().toString()));
         if (withAudio && avOffset > 0.001) {

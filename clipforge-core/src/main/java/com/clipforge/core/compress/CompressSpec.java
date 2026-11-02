@@ -10,10 +10,24 @@ import java.util.List;
  * @param options         encoder settings (locked once the job started)
  * @param totalDurationMs media duration of all sources together
  * @param totalBytes      size of all sources together
- * @param sourceHasAudio  whether the sources contain an audio track
+ * @param sourceHasAudio  whether the output gets the sources' audio (any of them has a track)
+ * @param normalize       common picture format for joining videos of different formats; {@code null} when all
+ *                        sources already share one
  */
 public record CompressSpec(List<CompressInput> sources, String output, CompressOptions options, long totalDurationMs,
-                           long totalBytes, boolean sourceHasAudio) {
+                           long totalBytes, boolean sourceHasAudio, Normalize normalize) {
+
+    /**
+     * Target format of a free merge: every source is scaled (aspect kept, black borders where needed), converted to
+     * this frame rate and to 8-bit 4:2:0, so its encoded segments can be appended to the others.
+     */
+    public record Normalize(int width, int height, double fps) {
+    }
+
+    public CompressSpec(List<CompressInput> sources, String output, CompressOptions options, long totalDurationMs,
+                        long totalBytes, boolean sourceHasAudio) {
+        this(sources, output, options, totalDurationMs, totalBytes, sourceHasAudio, null);
+    }
 
     public CompressSpec {
         // tolerate hand-edited or damaged project files: a job without sources fails instead of the whole load

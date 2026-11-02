@@ -175,7 +175,8 @@ public final class PipelinePanel extends VBox {
 
         List<String> parts = new ArrayList<>();
         if (doMerge) {
-            parts.add(Messages.get("pipeline.step.merge"));
+            parts.add(Messages.get(controller.freeMergeNeedsEncoding() ? "pipeline.step.mergeReencode"
+                    : "pipeline.step.merge"));
         }
         if (doSpeed) {
             parts.add(Messages.get("pipeline.step.speed", CompressOptions.formatSpeed(
@@ -220,7 +221,7 @@ public final class PipelinePanel extends VBox {
         note.setVisible(warn != null);
         note.setManaged(warn != null);
 
-        boolean encodes = doSpeed || doCompress;
+        boolean encodes = controller.runKind() == AppController.RunKind.ENCODE;
         boolean blocked = nothing
                 || controller.toolsProperty().get() == null
                 || (encodes && controller.compressOptions() == null)

@@ -271,6 +271,40 @@ class SegmentedEncoderTest {
     }
 
     @Test
+    void freeMergeJoinsVideosOfDifferentFormats() throws Exception {
+        Path dir = Files.createDirectories(tmp.resolve("free"));
+        Path a = dir.resolve("wide.mp4");
+        Path b = dir.resolve("phone.mp4");
+        // 320x180 30 fps with sound, then a portrait 240x320 25 fps 10-bit video without sound
+        FfmpegTestSupport.makeClip(tools, a, 4, "320x180");
+        FfmpegTestSupport.run(List.of(tools.ffmpeg().toString(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                "testsrc2=size=240x320:rate=25:duration=3", "-c:v", "libx265", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p10le", "-color_primaries", "bt2020", "-color_trc", "smpte2084",
+                "-colorspace", "bt2020nc", b.toString()));
+        ProbeService probe = new ProbeService(tools);
+        MediaInfo ma = probe.probe(a).orElseThrow();
+        MediaInfo mb = probe.probe(b).orElseThrow();
+        assertFalse(mb.hasAudio());
+        List<CompressInput> sources = List.of(CompressInput.of(a, ma), CompressInput.of(b, mb));
+        long ms = ma.duration().toMillis() + mb.duration().toMillis();
+        CompressOptions o = new CompressOptions(profile, profile.defaultQuality(), 2, 2, AudioMode.KEEP);
+        Path out = Files.createDirectories(tmp.resolve("free-out")).resolve("joined.mp4");
+        JobRecord job = JobRecord.compress(new CompressSpec(sources, out.toString(), o, ms,
+                Files.size(a) + Files.size(b), true, new CompressSpec.Normalize(320, 180, 30)), List.of(),
+                Clock.systemUTC().instant());
+        JobQueue q = queue(new Noop());
+        q.submit(List.of(job));
+        assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
+        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        MediaInfo m = probe.probe(out).orElseThrow();
+        assertEquals("320x180", m.resolution(), "the first video's size");
+        assertEquals(30, m.frameRate(), 0.5);
+        assertTrue(m.hasAudio(), "sound of the first, silence for the second");
+        assertEquals(ms / 1000.0, m.duration().toMillis() / 1000.0, 0.4);
+        assertEquals(4 * 30 + 3 * 30, frames(out), 3, "both videos at 30 fps");
+    }
+
+    @Test
     void cancellingAfterADeletionKeepsThePartialOutput() throws Exception {
         List<Path> clips = twoClips("delete-cancel");
         JobRecord job = jobFor(clips, new SourceDeletion(SourceDeletion.When.DURING, true), "cancel");

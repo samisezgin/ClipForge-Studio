@@ -8,6 +8,7 @@ import com.clipforge.core.ffmpeg.FfmpegLocator;
 import com.clipforge.core.ffmpeg.FfmpegTools;
 import com.clipforge.core.ffmpeg.ProbeService;
 import com.clipforge.core.i18n.Messages;
+import com.clipforge.core.merge.MergeMode;
 import com.clipforge.core.project.JobState;
 import com.clipforge.core.project.SourceDeletion;
 import com.clipforge.desktop.view.DeleteSourcesDialog;
@@ -190,6 +191,20 @@ class DesktopSmokeTest {
                 assertEquals(3, all.specs().getFirst().options().speed());
                 controller.setSteps(true, false, false);
                 assertEquals(AppController.RunKind.MERGE, controller.runKind());
+                // free merge: all selected clips in the user's order, one file; same format -> lossless
+                controller.setMergeMode(MergeMode.FREE);
+                var order = controller.orderedSelection();
+                assertEquals(3, order.size());
+                controller.moveInOrder(order.get(2), -2); // the last clip first
+                var reordered = controller.orderedSelection();
+                assertEquals(order.get(2), reordered.getFirst());
+                assertFalse(controller.freeMergeNeedsEncoding(), "same format");
+                assertEquals(AppController.RunKind.MERGE, controller.runKind());
+                AppController.MergePlan free = controller.planMerge();
+                assertTrue(free.ok(), String.valueOf(free.errorKey()));
+                assertEquals(1, free.specs().size(), "one file across both sessions");
+                assertEquals(reordered.stream().map(c -> c.path().toString()).toList(), free.specs().getFirst().inputs());
+                controller.setMergeMode(MergeMode.PER_SESSION);
                 return null;
             });
             Stage musicStage = onFx(() -> {
@@ -225,6 +240,19 @@ class DesktopSmokeTest {
             });
             Thread.sleep(300);
             snapshot(stageRef[0], OUT.resolve("ui-speed-en.png"));
+            onFx(() -> {
+                controller.setMergeMode(MergeMode.FREE);
+                var tabs = (TabPane) stageRef[0].getScene().lookup(".tab-pane");
+                tabs.getSelectionModel().select(0); // merge, free mode with its order list
+                sideScroll(stageRef[0]).setVvalue(1);
+                return null;
+            });
+            Thread.sleep(300);
+            snapshot(stageRef[0], OUT.resolve("ui-merge-free-en.png"));
+            onFx(() -> {
+                controller.setMergeMode(MergeMode.PER_SESSION);
+                return null;
+            });
             onFx(() -> {
                 var tabs = (TabPane) stageRef[0].getScene().lookup(".tab-pane");
                 tabs.getSelectionModel().select(2); // compress
