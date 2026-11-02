@@ -96,6 +96,7 @@ public final class AppController {
     private final ObjectProperty<java.util.Set<EncoderProfile>> encoders = new SimpleObjectProperty<>();
     /** Incremented whenever the selection changes, so views can refresh summaries. */
     private final ObjectProperty<Integer> selectionVersion = new SimpleObjectProperty<>(0);
+    private final ObjectProperty<Integer> pipelineVersion = new SimpleObjectProperty<>(0);
     private final ObjectProperty<Integer> projectVersion = new SimpleObjectProperty<>(0);
     private final javafx.beans.property.SimpleStringProperty outputDirProp = new javafx.beans.property.SimpleStringProperty();
     /** Set when a job stopped because its sources changed while the app was running; the view asks the user. */
@@ -413,6 +414,8 @@ public final class AppController {
         synchronized (project) {
             project.getFolders().remove(dir);
         }
+        // a scan still running includes the removed folder: drop its results (also the partial ones)
+        scanGeneration++;
         folders.setAll(project.getFolders());
         scheduleSave();
         refreshWatch();
@@ -440,8 +443,22 @@ public final class AppController {
             try {
                 ClipScanner scanner = new ClipScanner(new ProbeService(t),
                         new TimestampResolver(ZoneId.systemDefault()), clock);
+                // partial results reach the list at most every 300 ms; only the newest snapshot is applied
+                java.util.concurrent.atomic.AtomicReference<List<Clip>> pending =
+                        new java.util.concurrent.atomic.AtomicReference<>();
+                java.util.concurrent.Executor later = java.util.concurrent.CompletableFuture
+                        .delayedExecutor(300, java.util.concurrent.TimeUnit.MILLISECONDS);
                 List<Clip> clips = scanner.scan(dirs, (done, total) ->
-                        Platform.runLater(() -> setStatus("status.scanning", done, total)));
+                        Platform.runLater(() -> setStatus("status.scanning", done, total)), part -> {
+                    if (pending.getAndSet(part) == null) {
+                        later.execute(() -> Platform.runLater(() -> {
+                            List<Clip> p = pending.getAndSet(null);
+                            if (p != null) {
+                                applyPartialScan(generation, p);
+                            }
+                        }));
+                    }
+                });
                 List<Session> grouped = new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
                 Platform.runLater(() -> applyScan(generation, clips, grouped));
             } catch (Exception e) {
@@ -461,31 +478,60 @@ public final class AppController {
         }
     }
 
-    private void applyScan(int generation, List<Clip> scanned, List<Session> scannedSessions) {
-        scanning.set(false);
-        // outputs of this project's jobs (e.g. output folder = source folder) are never offered as new clips
-        java.util.Set<Path> outputs;
+    /** Shows the clips probed so far while the scan is still running; the final result replaces them. */
+    private void applyPartialScan(int generation, List<Clip> scanned) {
+        if (generation != scanGeneration || !scanning.get()) {
+            return; // stale, or the final result has already been applied
+        }
+        List<Clip> fresh = withoutUnfinishedOutputs(scanned);
+        acceptClips(fresh);
+        // on a rescan the clips listed before stay until they are probed again, so the list does not shrink and
+        // grow back; clips not probed yet keep their selection (no retainAll until the scan is complete)
+        Set<Path> probed = new HashSet<>();
+        fresh.forEach(c -> probed.add(c.path()));
+        List<Clip> shown = new ArrayList<>(fresh);
+        for (Session s : sessions) {
+            for (Clip c : s.clips()) {
+                if (!probed.contains(c.path())) {
+                    shown.add(c);
+                }
+            }
+        }
+        sessions.setAll(new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(shown));
+        bumpSelection();
+    }
+
+    /** Outputs still being written by this project's jobs are never listed as clips. */
+    private List<Clip> withoutUnfinishedOutputs(List<Clip> scanned) {
+        Set<Path> unfinished;
         synchronized (project) {
-            outputs = project.getJobs().stream().filter(j -> j.output() != null).map(j -> Path.of(j.output()))
-                    .collect(java.util.stream.Collectors.toSet());
+            unfinished = project.getJobs().stream()
+                    .filter(j -> j.output() != null && j.getState().unfinished())
+                    .map(j -> Path.of(j.output())).collect(java.util.stream.Collectors.toSet());
         }
-        List<Clip> clips = scanned.stream().filter(c -> !outputs.contains(c.path())).toList();
-        List<Session> grouped = clips.size() == scanned.size() ? scannedSessions
-                : new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
-        if (generation != scanGeneration) {
-            // the project or its folders changed while scanning: these results are stale
-            rescanRequested = false;
-            rescan();
-            return;
+        return unfinished.isEmpty() ? scanned : scanned.stream().filter(c -> !unfinished.contains(c.path())).toList();
+    }
+
+    /**
+     * Selects newly found ready clips and deselects clips that cannot be used.
+     * Finished outputs of this project's jobs are listed (they can be compressed next) but never selected
+     * automatically, so they do not slip into the next merge.
+     *
+     * @return the number of clips still being copied
+     */
+    private int acceptClips(List<Clip> clips) {
+        Set<Path> finishedOutputs;
+        synchronized (project) {
+            finishedOutputs = project.getJobs().stream()
+                    .filter(j -> j.output() != null && !j.getState().unfinished())
+                    .map(j -> Path.of(j.output())).collect(java.util.stream.Collectors.toSet());
         }
-        Set<Path> present = new HashSet<>();
         int copying = 0;
         for (Clip c : clips) {
-            present.add(c.path());
-            String key = c.path().toString();
             boolean isNew;
             synchronized (project) {
-                isNew = c.selectable() && project.getSeenClips().add(key);
+                isNew = c.selectable() && project.getSeenClips().add(c.path().toString())
+                        && !finishedOutputs.contains(c.path());
             }
             if (isNew) {
                 selected.add(c.path()); // newly found ready clips are selected by default
@@ -496,6 +542,25 @@ public final class AppController {
                     copying++;
                 }
             }
+        }
+        return copying;
+    }
+
+    private void applyScan(int generation, List<Clip> scanned, List<Session> scannedSessions) {
+        scanning.set(false);
+        List<Clip> clips = withoutUnfinishedOutputs(scanned);
+        List<Session> grouped = clips.size() == scanned.size() ? scannedSessions
+                : new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
+        if (generation != scanGeneration) {
+            // the project or its folders changed while scanning: these results are stale
+            rescanRequested = false;
+            rescan();
+            return;
+        }
+        int copying = acceptClips(clips);
+        Set<Path> present = new HashSet<>();
+        for (Clip c : clips) {
+            present.add(c.path());
         }
         selected.retainAll(present);
         sessions.setAll(grouped);
@@ -770,7 +835,98 @@ public final class AppController {
             project.setCompressFromFile(fromFile);
             project.setCompressFile(file == null ? null : file.toAbsolutePath().toString());
         }
+        bumpPipeline();
         scheduleSave();
+    }
+
+    // ------------------------------------------------------------------ steps of a run
+
+    /** What the start button does with the ticked steps. */
+    public enum RunKind {
+        /** nothing to do */
+        NONE,
+        /** lossless merge only */
+        MERGE,
+        /** one encoding pass that joins (if merging), speeds up and/or compresses */
+        ENCODE
+    }
+
+    /** Bumped when steps, speed or the source change, so views can refresh their summaries. */
+    public ObjectProperty<Integer> pipelineVersionProperty() {
+        return pipelineVersion;
+    }
+
+    private void bumpPipeline() {
+        pipelineVersion.set(pipelineVersion.get() + 1);
+    }
+
+    public boolean stepMerge() {
+        return project.isStepMerge();
+    }
+
+    public boolean stepSpeed() {
+        return project.isStepSpeed();
+    }
+
+    public boolean stepCompress() {
+        return project.isStepCompress();
+    }
+
+    public void setSteps(boolean merge, boolean speed, boolean compress) {
+        synchronized (project) {
+            project.setStepMerge(merge);
+            project.setStepSpeed(speed);
+            project.setStepCompress(compress);
+        }
+        bumpPipeline();
+        scheduleSave();
+    }
+
+    public double speedFactor() {
+        return project.getSpeedFactor();
+    }
+
+    public void setSpeedFactor(double factor) {
+        synchronized (project) {
+            project.setSpeedFactor(factor);
+        }
+        bumpPipeline();
+        scheduleSave();
+    }
+
+    public RunKind runKind() {
+        if (project.isStepSpeed() || project.isStepCompress()) {
+            return RunKind.ENCODE;
+        }
+        // a single file has nothing to merge
+        return project.isStepMerge() && !project.isCompressFromFile() ? RunKind.MERGE : RunKind.NONE;
+    }
+
+    /**
+     * Encoder settings for a run. With compression they come from the compress tab; a speed-up alone has to
+     * re-encode too, but keeps the picture close to the source (top of the "indistinguishable" range) instead of
+     * aiming for a small file.
+     */
+    /** An encoding run compresses unless it is a speed-up alone. */
+    private boolean compressing() {
+        return project.isStepCompress() || !project.isStepSpeed();
+    }
+
+    private CompressOptions runOptions(boolean compress) {
+        CompressOptions o = compressOptions();
+        if (o == null) {
+            return null;
+        }
+        if (!compress) {
+            EncoderProfile p = o.profile();
+            // only the quality changes: the date/time stamp and the other settings still apply
+            o = new CompressOptions(p, p.range(com.clipforge.core.compress.QualityBand.TRANSPARENT)[1],
+                    o.segmentSeconds(), o.concurrency(), o.audio(), o.music(), o.overlayTime(), o.speed());
+        }
+        if (project.isStepSpeed()) {
+            o = o.withSpeed(project.getSpeedFactor());
+        }
+        return withAudio(o);
     }
 
     /** Result of {@link #planCompress()}. */
@@ -801,9 +957,10 @@ public final class AppController {
             result.accept(CompressPlan.error(audioErr, missingTrack));
             return;
         }
-        CompressInputs in = new CompressInputs(tools.get(), withAudio(compressOptions()), project.getOutputDir(),
-                project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions), Set.copyOf(selected),
-                project.getMergeMode(), project.getMergeOptions(), reservedOutputs(), selectedClips().isEmpty());
+        CompressInputs in = new CompressInputs(tools.get(), runOptions(forSample || compressing()),
+                project.getOutputDir(), project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions),
+                Set.copyOf(selected), project.getMergeMode(), project.getMergeOptions(), reservedOutputs(),
+                selectedClips().isEmpty(), project.isStepMerge());
         Project origin = project;
         Thread.ofVirtual().start(() -> {
             CompressPlan plan;
@@ -829,7 +986,8 @@ public final class AppController {
     /** Snapshot of everything planning needs, taken on the FX thread. */
     private record CompressInputs(FfmpegTools tools, CompressOptions options, String outputDir, boolean fromFile,
                                   String file, List<Session> sessions, Set<Path> selected, MergeMode mode,
-                                  MergeOptions mergeOptions, List<Path> reserved, boolean nothingSelected) {
+                                  MergeOptions mergeOptions, List<Path> reserved, boolean nothingSelected,
+                                  boolean join) {
     }
 
     /** Synchronous planning on the current thread (tests). */
@@ -839,9 +997,10 @@ public final class AppController {
         if (audioErr != null) {
             return CompressPlan.error(audioErr, missingTrack);
         }
-        return planCompress(new CompressInputs(tools.get(), withAudio(compressOptions()), project.getOutputDir(),
+        return planCompress(new CompressInputs(tools.get(), runOptions(compressing()), project.getOutputDir(),
                 project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions), Set.copyOf(selected),
-                project.getMergeMode(), project.getMergeOptions(), reservedOutputs(), selectedClips().isEmpty()));
+                project.getMergeMode(), project.getMergeOptions(), reservedOutputs(), selectedClips().isEmpty(),
+                project.isStepMerge()));
     }
 
     private static CompressPlan planCompress(CompressInputs in) {
@@ -882,9 +1041,20 @@ public final class AppController {
                 }
                 java.util.Map<Path, Clip> byPath = new java.util.HashMap<>();
                 in.sessions().forEach(s -> s.clips().forEach(c -> byPath.put(c.path(), c)));
-                for (MergeSpec m : MergePlanner.plan(in.sessions(), in.selected(), in.mode(), outDir,
-                        in.mergeOptions(), reserved)) {
-                    List<Clip> clips = m.inputs().stream().map(i -> byPath.get(Path.of(i))).toList();
+                List<List<Clip>> groups = new ArrayList<>();
+                if (in.join()) {
+                    // joined like a merge: per session or all in one, while encoding (no intermediate file)
+                    for (MergeSpec m : MergePlanner.plan(in.sessions(), in.selected(), in.mode(), outDir,
+                            in.mergeOptions(), reserved)) {
+                        groups.add(m.inputs().stream().map(i -> byPath.get(Path.of(i))).toList());
+                    }
+                } else {
+                    // merging not ticked: every selected clip becomes its own output
+                    in.sessions().forEach(s -> s.clips().stream()
+                            .filter(c -> c.selectable() && in.selected().contains(c.path()))
+                            .forEach(c -> groups.add(List.of(c))));
+                }
+                for (List<Clip> clips : groups) {
                     List<Path> taken = new ArrayList<>(reserved);
                     specs.forEach(s -> taken.add(Path.of(s.output())));
                     specs.add(CompressPlanner.forClips(clips, outDir, o, taken));

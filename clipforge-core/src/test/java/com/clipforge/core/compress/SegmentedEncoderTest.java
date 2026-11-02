@@ -115,6 +115,26 @@ class SegmentedEncoderTest {
     }
 
     @Test
+    void speedsUpVideoAndAudioKeepingTheFrameRate() throws Exception {
+        MediaInfo m = new ProbeService(tools).probe(source).orElseThrow();
+        CompressOptions o = new CompressOptions(profile, profile.defaultQuality(), 4, 2, AudioMode.KEEP).withSpeed(2.5);
+        CompressSpec spec = CompressPlanner.forFile(source, Files.size(source), m,
+                Files.createDirectories(tmp.resolve("çıktı")), o, List.of());
+        assertTrue(spec.output().endsWith("_av1_2.5x.mp4"), spec.output());
+        JobRecord job = JobRecord.compress(spec, List.of(), Clock.systemUTC().instant());
+        JobQueue q = queue(new Noop());
+        q.submit(List.of(job));
+        assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
+        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        Path out = Path.of(job.output());
+        MediaInfo r = new ProbeService(tools).probe(out).orElseThrow();
+        assertEquals(8.0, r.duration().toMillis() / 1000.0, 0.3, "20 s at 2.5x");
+        assertTrue(r.hasAudio(), "sped-up audio kept");
+        assertEquals(30, r.frameRate(), 0.5, "source frame rate kept");
+        assertEquals(240, frames(out), 4, "one frame per 2.5 source frames");
+    }
+
+    @Test
     void stopNowThenResumeContinuesFromSegmentTable() throws Exception {
         JobRecord job = newJob(1);
         JobQueue[] holder = new JobQueue[1];

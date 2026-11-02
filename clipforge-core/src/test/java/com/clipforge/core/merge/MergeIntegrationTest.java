@@ -61,6 +61,20 @@ class MergeIntegrationTest {
         return new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
     }
 
+    @Test
+    void scanReportsGrowingPartialResults() throws Exception {
+        ClipScanner scanner = new ClipScanner(new ProbeService(tools), new TimestampResolver(ZoneId.systemDefault()),
+                Clock.systemDefaultZone());
+        List<List<Clip>> snapshots = new java.util.ArrayList<>();
+        List<Clip> clips = scanner.scan(List.of(folder), null, snapshots::add);
+        // throttled to one call per 200 ms, plus one after the last file
+        assertTrue(!snapshots.isEmpty() && snapshots.size() <= 4, String.valueOf(snapshots.size()));
+        for (int i = 1; i < snapshots.size(); i++) {
+            assertTrue(snapshots.get(i).size() >= snapshots.get(i - 1).size(), "snapshots only grow");
+        }
+        assertEquals(clips, snapshots.getLast()); // the last snapshot is the final, sorted result
+    }
+
     private static Set<Path> all(List<Session> sessions) {
         return sessions.stream().flatMap(s -> s.clips().stream()).map(Clip::path).collect(Collectors.toSet());
     }

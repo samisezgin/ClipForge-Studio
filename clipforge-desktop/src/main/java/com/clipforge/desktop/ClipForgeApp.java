@@ -54,6 +54,13 @@ public class ClipForgeApp extends Application {
         showView();
         stage.setWidth(1280);
         stage.setHeight(820);
+        // window, taskbar and Alt+Tab icon; dialogs owned by the stage inherit it
+        for (int size : new int[]{16, 24, 32, 48, 64, 128, 256}) {
+            var url = ClipForgeApp.class.getResource("icons/icon-" + size + ".png");
+            if (url != null) {
+                stage.getIcons().add(new javafx.scene.image.Image(url.toExternalForm()));
+            }
+        }
         stage.setOnCloseRequest(e -> {
             if (!view.confirmClose()) {
                 e.consume();

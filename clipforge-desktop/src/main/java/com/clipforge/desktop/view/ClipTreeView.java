@@ -108,7 +108,20 @@ public final class ClipTreeView extends TreeTableView<ClipTreeView.Row> {
             }
             root.getChildren().add(day);
         }
+        // the list is rebuilt repeatedly while a scan fills it in: keep the user's scroll position
+        int top = firstVisibleRow();
         setRoot(root);
+        if (top > 0) {
+            scrollTo(top);
+        }
+    }
+
+    private int firstVisibleRow() {
+        if (lookup(".virtual-flow") instanceof javafx.scene.control.skin.VirtualFlow<?> flow
+                && flow.getFirstVisibleCell() != null) {
+            return flow.getFirstVisibleCell().getIndex();
+        }
+        return 0;
     }
 
     /** Remembers the user's expand/collapse choice for a row across rebuilds. */

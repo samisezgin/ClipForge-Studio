@@ -322,7 +322,8 @@ public final class SegmentedEncoder implements JobExecutor {
                     return base;
                 }
                 // anchor at the planned position (no cumulative drift), never before the previous segment's end
-                ticks = Math.max(state.getCommittedTicks(), Math.round(next.getStartMs() * (TIMESCALE / 1000.0)));
+                ticks = Math.max(state.getCommittedTicks(),
+                        Math.round(next.getStartMs() / spec.options().speed() * (TIMESCALE / 1000.0)));
                 seq = state.getNextSequence();
             }
             Path temp = CompressRecovery.segmentFile(spec, next);
@@ -399,6 +400,13 @@ public final class SegmentedEncoder implements JobExecutor {
                 LOG.warning("No font found for the date/time overlay; encoding without it");
             }
         }
+        double fps = in.frameRate() > 0 ? in.frameRate() : 30;
+        CompressOptions o = spec.options();
+        if (o.spedUp()) {
+            // after the overlay, so the stamp keeps showing the real recording time; fps drops the surplus frames
+            // so the output keeps the source frame rate (and the encoder only sees the frames that are kept)
+            vf += String.format(Locale.ROOT, ",setpts=(PTS-STARTPTS)/%s,fps=%.3f", o.speed(), fps);
+        }
         // the filter graph goes through a file: its quoting does not survive every command-line parser
         Path vfFile = temp.resolveSibling(s.fileName() + ".vf.txt");
         Files.writeString(vfFile, vf, StandardCharsets.UTF_8);
@@ -408,14 +416,15 @@ public final class SegmentedEncoder implements JobExecutor {
                 "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "-y", temp.toString()));
         long t0 = System.nanoTime();
         Duration total = Duration.ofMillis(s.durationMs());
-        double fps = in.frameRate() > 0 ? in.frameRate() : 30;
         FfmpegResult r = FfmpegProcess.run(cmd, total, p -> {
-            // out_time is not usable with -copyts; frames are
-            long ms = Math.min(s.durationMs(), Math.round(p.frames() / fps * 1000));
-            progress.accept(new Progress(Duration.ofMillis(ms), total, p.speed(), p.outputBytes(), p.frames()));
+            // out_time is not usable with -copyts; frames are (one output frame per `speed` source frames)
+            long ms = Math.min(s.durationMs(), Math.round(p.frames() / fps * 1000 * o.speed()));
+            // FFmpeg's speed is in output time; the job counts source time
+            progress.accept(new Progress(Duration.ofMillis(ms), total, p.speed() * o.speed(), p.outputBytes(),
+                    p.frames()));
         }, token);
         Files.deleteIfExists(vfFile);
-        if (r.success() && !CompressRecovery.validSegment(temp, s)) {
+        if (r.success() && !CompressRecovery.validSegment(temp, s, o.speed())) {
             r = new FfmpegResult(1, false, List.of("Encoded segment " + s.getIndex() + " is incomplete or too short"));
         }
         return new SegmentResult(s, r, (System.nanoTime() - t0) / 1e9);
@@ -466,8 +475,9 @@ public final class SegmentedEncoder implements JobExecutor {
         CancellationToken token = new CancellationToken();
         ctx.track(token);
         try {
-            FfmpegResult r = new MusicRenderer(tools).render(s, spec.totalDurationMs() / 1000.0, original, work,
-                    audio, token);
+            // music plays at normal speed over the (shorter) sped-up video
+            FfmpegResult r = new MusicRenderer(tools).render(s,
+                    spec.options().outputMs(spec.totalDurationMs()) / 1000.0, original, work, audio, token);
             if (r.cancelled()) {
                 Files.deleteIfExists(audio);
                 return ctx.cancelRequested() ? cancelAndClean(spec) : Outcome.PAUSED;
@@ -490,11 +500,17 @@ public final class SegmentedEncoder implements JobExecutor {
     private Outcome extractOriginal(JobRecord job, JobContext ctx, CompressSpec spec, Path work, Path audio)
             throws IOException {
         List<String> input = audioInputArgs(spec, work);
-        for (boolean copy : new boolean[]{true, false}) {
+        double speed = spec.options().speed();
+        // sped-up sound has to be re-encoded; atempo keeps the pitch
+        boolean[] attempts = spec.options().spedUp() ? new boolean[]{false} : new boolean[]{true, false};
+        for (boolean copy : attempts) {
             List<String> cmd = new ArrayList<>();
             cmd.add(tools.ffmpeg().toString());
             cmd.addAll(input);
             cmd.addAll(List.of("-map", "0:a:0", "-vn", "-sn", "-dn"));
+            if (spec.options().spedUp()) {
+                cmd.addAll(List.of("-af", "atempo=" + CompressOptions.formatSpeed(speed)));
+            }
             cmd.addAll(copy ? List.of("-c:a", "copy") : List.of("-c:a", "aac", "-b:a", "160k"));
             cmd.addAll(List.of("-f", "mp4", "-y", audio.toString()));
             CancellationToken token = new CancellationToken();
@@ -543,7 +559,7 @@ public final class SegmentedEncoder implements JobExecutor {
         // background music simply starts with the video
         CompressInput first = spec.sources().getFirst();
         double avOffset = spec.options().audio() == AudioMode.KEEP
-                ? (first.videoStartUs() - first.audioStartUs()) / 1e6 : 0;
+                ? (first.videoStartUs() - first.audioStartUs()) / 1e6 / spec.options().speed() : 0;
         List<String> cmd = new ArrayList<>(List.of(tools.ffmpeg().toString()));
         if (withAudio && avOffset > 0.001) {
             cmd.addAll(List.of("-itsoffset", seconds(avOffset)));

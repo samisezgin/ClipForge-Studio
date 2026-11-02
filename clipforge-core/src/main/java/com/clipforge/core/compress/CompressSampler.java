@@ -67,7 +67,13 @@ public final class CompressSampler {
             cmd.add(tools.ffmpeg().toString());
             cmd.addAll(List.of("-ss", fmt(from), "-t", fmt(length), "-i", source.path()));
             cmd.addAll(List.of("-map", "0:v:0"));
-            cmd.addAll(spec.options().profile().videoArgs(spec.options().quality()));
+            CompressOptions o = spec.options();
+            if (o.spedUp()) {
+                // sped-up footage has more motion per frame: sample it the way it will be encoded
+                double fps = source.frameRate() > 0 ? source.frameRate() : 30;
+                cmd.addAll(List.of("-vf", String.format(Locale.ROOT, "setpts=PTS/%s,fps=%.3f", o.speed(), fps)));
+            }
+            cmd.addAll(o.profile().videoArgs(o.quality()));
             cmd.addAll(List.of("-an", "-sn", "-dn", "-f", "mp4", "-y", out.toString()));
             long start = System.nanoTime();
             FfmpegResult r = FfmpegProcess.run(cmd, Duration.ofMillis(Math.round(length * 1000)), null, token);
@@ -81,7 +87,9 @@ public final class CompressSampler {
             // extra parallel segments help, but less than linearly (shared GPU encoder / CPU cores)
             double parallel = 1 + (Math.max(1, spec.options().concurrency()) - 1) * (spec.options().profile().hardware() ? 0.6 : 0.3);
             Duration time = Duration.ofSeconds(Math.round(total / (speed * parallel)));
-            return new Result(length, bytes, speed, estimated, time, Math.round(bytes * 8 / length / 1000));
+            // `length` source seconds became length/speed seconds of output (the estimate above scales alike)
+            double outSeconds = length / o.speed();
+            return new Result(length, bytes, speed, estimated, time, Math.round(bytes * 8 / outSeconds / 1000));
         } finally {
             Files.deleteIfExists(out);
             Files.deleteIfExists(work);
