@@ -5,6 +5,14 @@ each development phase is a minor release.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-02
+First stable release: all four planned phases (scanning and lossless merge, segmented resumable compression, audio,
+telemetry and extras) are complete and reviewed.
+
+### Added
+- End-to-end test (`-Dclipforge.e2e=true`) covering scan, merge in all audio modes, compression with stop + simulated
+  crash + resume, telemetry export, language switch and folder watching; see docs/E2E.md.
+
 ## [0.4.0] - 2026-11-02
 ### Added
 - Telemetry tab completed: dash cam (SigmaStar) clock and GPS data, GoPro GPMF, DJI .SRT and phone location tags;
