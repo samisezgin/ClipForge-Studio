@@ -58,7 +58,13 @@ performance impact.
 - Pause / resume / crash recovery — see [RECOVERY.md](RECOVERY.md).
 - The final mux always writes a standard MP4 with `+faststart` (seekable, plays everywhere).
 
-## Phase 3 — Audio (v0.3.0)
+## Phase 3 — Audio (v0.3.0) — done
+Implemented as a shared audio panel used by merge and compression jobs (`core.audio.MusicRenderer`). The playlist is
+rendered once into a 48 kHz block; looping uses a precomputed seamless unit (block tail crossfaded into its head + body)
+repeated with `-stream_loop -1`, so any video length works with constant memory. Filter graphs are passed with
+`-/filter_complex <file>`. Merging stays stream copy for video; only the soundtrack is encoded (AAC 192k stereo).
+
+Original plan:
 - Keep / remove (`-an`) / background music (video stream-copied, only audio encoded, AAC 192k stereo).
 - Music playlist, volume, optional fade-out (checkbox + seconds, default 3 s), loop switch (default on) with
   crossfade (0–3 s) built via `acrossfade` chains in a `-filter_complex_script`; long videos use a seamless loop block

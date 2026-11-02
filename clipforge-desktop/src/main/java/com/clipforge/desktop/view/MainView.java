@@ -96,21 +96,21 @@ public final class MainView {
             }
         });
         javafx.scene.control.Tab mergeTab = new javafx.scene.control.Tab(Messages.get("merge.title"), merge);
-        javafx.scene.control.ScrollPane compressScroll = new javafx.scene.control.ScrollPane(compressPanel);
-        compressScroll.setFitToWidth(true);
-        compressScroll.getStyleClass().add("edge-to-edge");
-        javafx.scene.control.Tab compressTab = new javafx.scene.control.Tab(Messages.get("compress.title"), compressScroll);
+        javafx.scene.control.Tab compressTab = new javafx.scene.control.Tab(Messages.get("compress.title"), compressPanel);
         javafx.scene.control.TabPane tabs = new javafx.scene.control.TabPane(mergeTab, compressTab);
         tabs.setTabClosingPolicy(javafx.scene.control.TabPane.TabClosingPolicy.UNAVAILABLE);
-        VBox side = new VBox(10, outputBox, tabs);
-        VBox.setVgrow(tabs, Priority.ALWAYS);
+        AudioPanel audio = new AudioPanel(controller, listeners);
+        VBox side = new VBox(10, outputBox, audio, tabs);
         side.setPadding(new Insets(12));
-        side.setMinWidth(300);
-        side.setPrefWidth(340);
         side.getStyleClass().add("side-panel");
-        SplitPane split = new SplitPane(tree, side);
+        javafx.scene.control.ScrollPane sideScroll = new javafx.scene.control.ScrollPane(side);
+        sideScroll.setFitToWidth(true);
+        sideScroll.setMinWidth(320);
+        sideScroll.setPrefWidth(360);
+        sideScroll.getStyleClass().addAll("edge-to-edge", "side-panel");
+        SplitPane split = new SplitPane(tree, sideScroll);
         split.setDividerPositions(0.7);
-        SplitPane.setResizableWithParent(side, false);
+        SplitPane.setResizableWithParent(sideScroll, false);
 
         JobsView jobs = new JobsView(controller, host, listeners);
         SplitPane vertical = new SplitPane(split, jobs);

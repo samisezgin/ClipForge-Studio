@@ -5,6 +5,15 @@ each development phase is a minor release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+### Added
+- Audio panel shared by merging and compression: keep original audio, remove it, or background music.
+- Music playlist (MP3, M4A, FLAC, WAV, …) with add / remove / reorder and total length.
+- Loop switch (default on): short music repeats until the video ends with a seamless crossfade (0-3 s) at every
+  restart; off: the playlist plays once, then silence.
+- Fade-out switch with adjustable length (0.5-30 s, default 3 s), music volume, optional quiet mix of the original sound.
+- Merging with music keeps the video stream-copied; only the soundtrack is encoded.
+
 ## [0.2.0] - 2026-11-02
 ### Added
 - Compression tab: compress the selected clips (joined in the same pass, grouped like the merge mode) or any video file.

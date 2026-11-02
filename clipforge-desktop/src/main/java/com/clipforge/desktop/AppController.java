@@ -1,6 +1,6 @@
 package com.clipforge.desktop;
 
-import com.clipforge.core.compress.AudioMode;
+import com.clipforge.core.audio.AudioMode;
 import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.compress.CompressPlanner;
 import com.clipforge.core.compress.CompressSampler;
@@ -578,6 +578,65 @@ public final class AppController {
         scheduleSave();
     }
 
+    // ------------------------------------------------------------------ audio settings (merge and compression)
+
+    public com.clipforge.core.audio.AudioMode audioMode() {
+        return project.getAudioMode();
+    }
+
+    public com.clipforge.core.audio.MusicSettings music() {
+        return project.getMusic();
+    }
+
+    public void setAudio(com.clipforge.core.audio.AudioMode mode, com.clipforge.core.audio.MusicSettings music) {
+        if (mode == project.getAudioMode() && music.equals(project.getMusic())) {
+            return;
+        }
+        synchronized (project) {
+            project.setAudioMode(mode);
+            project.setMusic(music);
+        }
+        scheduleSave();
+    }
+
+    /** Validates the music selection; returns an i18n error key or {@code null}. */
+    private String audioError() {
+        if (project.getAudioMode() != com.clipforge.core.audio.AudioMode.MUSIC) {
+            return null;
+        }
+        List<String> tracks = project.getMusic().tracks();
+        if (tracks.isEmpty()) {
+            return "error.noMusic";
+        }
+        for (String t : tracks) {
+            if (!Files.isRegularFile(Path.of(t))) {
+                return "error.musicMissing";
+            }
+        }
+        return null;
+    }
+
+    /** Total length of the music playlist in seconds, measured in the background. */
+    public void measureMusic(java.util.function.Consumer<Double> result) {
+        FfmpegTools t = tools.get();
+        List<String> tracks = project.getMusic().tracks();
+        if (t == null || tracks.isEmpty()) {
+            result.accept(0.0);
+            return;
+        }
+        Thread.ofVirtual().start(() -> {
+            double total;
+            try {
+                total = new com.clipforge.core.audio.MusicRenderer(t).durations(tracks).stream()
+                        .mapToDouble(Double::doubleValue).sum();
+            } catch (IOException e) {
+                total = -1;
+            }
+            double v = total;
+            Platform.runLater(() -> result.accept(v));
+        });
+    }
+
     // ------------------------------------------------------------------ compression settings
 
     public ObjectProperty<java.util.Set<EncoderProfile>> encodersProperty() {
@@ -646,7 +705,12 @@ public final class AppController {
     /** Plans in the background (probing a 50 GB file or a slow drive must not freeze the UI). */
     public void planCompressAsync(java.util.function.Consumer<CompressPlan> result) {
         ensureOutputDir();
-        CompressInputs in = new CompressInputs(tools.get(), compressOptions(), project.getOutputDir(),
+        String audioErr = audioError();
+        if (audioErr != null) {
+            result.accept(CompressPlan.error(audioErr));
+            return;
+        }
+        CompressInputs in = new CompressInputs(tools.get(), withAudio(compressOptions()), project.getOutputDir(),
                 project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions), Set.copyOf(selected),
                 project.getMergeMode(), project.getMergeOptions(), reservedOutputs(), selectedClips().isEmpty());
         Thread.ofVirtual().start(() -> {
@@ -662,6 +726,10 @@ public final class AppController {
         });
     }
 
+    private CompressOptions withAudio(CompressOptions o) {
+        return o == null ? null : o.withAudio(project.getAudioMode(), project.getMusic());
+    }
+
     /** Snapshot of everything planning needs, taken on the FX thread. */
     private record CompressInputs(FfmpegTools tools, CompressOptions options, String outputDir, boolean fromFile,
                                   String file, List<Session> sessions, Set<Path> selected, MergeMode mode,
@@ -671,7 +739,11 @@ public final class AppController {
     /** Synchronous planning on the current thread (tests). */
     public CompressPlan planCompress() {
         ensureOutputDir();
-        return planCompress(new CompressInputs(tools.get(), compressOptions(), project.getOutputDir(),
+        String audioErr = audioError();
+        if (audioErr != null) {
+            return CompressPlan.error(audioErr);
+        }
+        return planCompress(new CompressInputs(tools.get(), withAudio(compressOptions()), project.getOutputDir(),
                 project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions), Set.copyOf(selected),
                 project.getMergeMode(), project.getMergeOptions(), reservedOutputs(), selectedClips().isEmpty()));
     }
@@ -820,6 +892,10 @@ public final class AppController {
         if (selectedClips().isEmpty()) {
             return MergePlan.error("error.noSelection");
         }
+        String audioErr = audioError();
+        if (audioErr != null) {
+            return MergePlan.error(audioErr);
+        }
         ensureOutputDir();
         String out = project.getOutputDir();
         if (out == null || out.isBlank()) {
@@ -834,7 +910,7 @@ public final class AppController {
                         .map(j -> Path.of(j.output())).toList();
             }
             List<MergeSpec> specs = MergePlanner.plan(sessions, selected, project.getMergeMode(), outDir,
-                    project.getMergeOptions(), reserved);
+                    project.getMergeOptions().withAudio(project.getAudioMode(), project.getMusic()), reserved);
             long total = specs.stream().mapToLong(MergeSpec::totalBytes).sum();
             long largest = specs.stream().mapToLong(MergeSpec::totalBytes).max().orElse(0);
             DiskCheck.Result disk = DiskCheck.check(outDir, total, largest);

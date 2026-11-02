@@ -1,5 +1,6 @@
 package com.clipforge.core.compress;
 
+import com.clipforge.core.audio.AudioMode;
 import com.clipforge.core.FfmpegTestSupport;
 import com.clipforge.core.ffmpeg.FfmpegTools;
 import com.clipforge.core.ffmpeg.ProbeService;
@@ -286,6 +287,35 @@ class SegmentedEncoderTest {
         q2.resume();
         assertTrue(q2.awaitIdle(Duration.ofMinutes(3)));
         assertFinished(job);
+    }
+
+    @Test
+    void compressWithLoopingMusicAndWithoutAudio() throws Exception {
+        Path tune = tmp.resolve("tune.mp3");
+        FfmpegTestSupport.run(List.of(tools.ffmpeg().toString(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                "sine=frequency=600:duration=3", "-c:a", "libmp3lame", tune.toString()));
+        MediaInfo src = new ProbeService(tools).probe(source).orElseThrow();
+        Path outDir = Files.createDirectories(tmp.resolve("music-out"));
+        var music = new com.clipforge.core.audio.MusicSettings(List.of(tune.toString()), true, 0.5, true, 2, 1.0,
+                true, 0.2);
+        CompressOptions withMusic = new CompressOptions(profile, profile.defaultQuality(), 4, 2,
+                AudioMode.MUSIC, music);
+        CompressOptions silent = new CompressOptions(profile, profile.defaultQuality(), 4, 2, AudioMode.REMOVE);
+        JobRecord a = JobRecord.compress(CompressPlanner.forFile(source, Files.size(source), src, outDir, withMusic,
+                List.of()), List.of(), Clock.systemUTC().instant());
+        JobRecord b = JobRecord.compress(CompressPlanner.forFile(source, Files.size(source), src, outDir, silent,
+                List.of(Path.of(a.output()))), List.of(), Clock.systemUTC().instant());
+        JobQueue q = queue(new Noop());
+        q.submit(List.of(a, b));
+        assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
+        assertEquals(JobState.DONE, a.getState(), String.valueOf(a.getErrorDetail()));
+        assertEquals(JobState.DONE, b.getState(), String.valueOf(b.getErrorDetail()));
+        MediaInfo ma = new ProbeService(tools).probe(Path.of(a.output())).orElseThrow();
+        assertEquals("aac", ma.audioCodec(), "music track");
+        assertEquals(20.0, ma.duration().toMillis() / 1000.0, 0.5);
+        MediaInfo mb = new ProbeService(tools).probe(Path.of(b.output())).orElseThrow();
+        assertFalse(mb.hasAudio(), "audio removed");
+        assertEquals(FRAMES, frames(Path.of(b.output())));
     }
 
     @Test

@@ -1,7 +1,7 @@
 package com.clipforge.desktop.view;
 
 import atlantafx.base.theme.Styles;
-import com.clipforge.core.compress.AudioMode;
+import com.clipforge.core.audio.AudioMode;
 import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.compress.CompressSampler;
 import com.clipforge.core.compress.EncoderProfile;
@@ -51,8 +51,6 @@ public final class CompressPanel extends VBox {
     private final Label qualityValue = new Label();
     private final ComboBox<Integer> segment = new ComboBox<>(FXCollections.observableArrayList(SEGMENT_CHOICES));
     private final Spinner<Integer> parallel = new Spinner<>(1, 4, 1);
-    private final RadioButton audioKeep = new RadioButton(Messages.get("compress.audio.keep"));
-    private final RadioButton audioRemove = new RadioButton(Messages.get("compress.audio.remove"));
     private final Label sampleResult = new Label();
     private final Button sampleButton = new Button(Messages.get("compress.sample"));
     private final Button startButton = new Button(Messages.get("compress.start"));
@@ -138,10 +136,6 @@ public final class CompressPanel extends VBox {
         parallel.valueProperty().addListener((o, a, b) -> saveOptions());
         parallel.setPrefWidth(80);
 
-        ToggleGroup audio = new ToggleGroup();
-        audioKeep.setToggleGroup(audio);
-        audioRemove.setToggleGroup(audio);
-        audio.selectedToggleProperty().addListener((o, a, b) -> saveOptions());
 
         GridPane grid = new GridPane();
         grid.setHgap(8);
@@ -174,7 +168,7 @@ public final class CompressPanel extends VBox {
         getChildren().addAll(fromSelection, fromFile, fileRow, summary, new Separator(),
                 new Label(Messages.get("compress.encoder")), encoder, encoderNote,
                 new Label(Messages.get("compress.quality")), qualityRow, grid,
-                new Label(Messages.get("compress.audio")), audioKeep, audioRemove, new Separator(),
+                new Separator(),
                 sampleButton, sampleResult, startButton, note);
 
         listeners.on(controller.encodersProperty(), (o, a, b) -> load());
@@ -213,8 +207,7 @@ public final class CompressPanel extends VBox {
             qualityValue.setText(Messages.get("compress.quality.value", o.quality()));
             segment.setValue(SEGMENT_CHOICES.contains(o.segmentSeconds()) ? o.segmentSeconds() : 0);
             parallel.getValueFactory().setValue(o.concurrency());
-            audioKeep.setSelected(o.audio() == AudioMode.KEEP);
-            audioRemove.setSelected(o.audio() == AudioMode.REMOVE);
+
         } finally {
             loading = false;
         }
@@ -226,7 +219,7 @@ public final class CompressPanel extends VBox {
         }
         controller.setCompressOptions(new CompressOptions(encoder.getValue(), (int) Math.round(quality.getValue()),
                 segment.getValue() == null ? 0 : segment.getValue(), parallel.getValue(),
-                audioRemove.isSelected() ? AudioMode.REMOVE : AudioMode.KEEP));
+                AudioMode.KEEP)); // audio comes from the shared audio panel when the job is planned
         sampleResult.setText("");
     }
 

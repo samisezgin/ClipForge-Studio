@@ -7,6 +7,7 @@ module com.clipforge.core {
     requires com.fasterxml.jackson.datatype.jsr310;
 
     exports com.clipforge.core;
+    exports com.clipforge.core.audio;
     exports com.clipforge.core.compress;
     exports com.clipforge.core.ffmpeg;
     exports com.clipforge.core.i18n;
@@ -23,4 +24,5 @@ module com.clipforge.core {
     opens com.clipforge.core.merge to com.fasterxml.jackson.databind;
     opens com.clipforge.core.ffmpeg to com.fasterxml.jackson.databind;
     opens com.clipforge.core.compress to com.fasterxml.jackson.databind;
+    opens com.clipforge.core.audio to com.fasterxml.jackson.databind;
 }
