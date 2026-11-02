@@ -50,7 +50,7 @@ public final class CompressRecovery {
                 }
                 case ENCODED -> {
                     // scenario 4: keep a finished segment only if it is complete
-                    if (!validSegment(temp, s)) {
+                    if (!validSegment(temp, s, spec.options().speed())) {
                         Files.deleteIfExists(temp);
                         s.setState(SegmentState.PENDING);
                     }
@@ -116,7 +116,8 @@ public final class CompressRecovery {
             if (s.getState() != SegmentState.APPENDED) {
                 continue;
             }
-            long segEnd = s.getEndMs() * (SegmentedEncoder.TIMESCALE / 1000);
+            long segEnd = Math.round(s.getEndMs() / state.getSpec().options().speed()
+                    * (SegmentedEncoder.TIMESCALE / 1000.0));
             boolean found = false;
             while (intact && j < fragments.size()) {
                 FragmentedMp4.Fragment f = fragments.get(j++);
@@ -161,7 +162,8 @@ public final class CompressRecovery {
         state.setNextSequence(1);
     }
 
-    static boolean validSegment(Path temp, SegmentRecord s) {
+    /** @param speed speed-up factor: the encoded segment is that many times shorter than its source range */
+    static boolean validSegment(Path temp, SegmentRecord s, double speed) {
         try {
             if (!Files.isRegularFile(temp)) {
                 return false;
@@ -170,7 +172,7 @@ public final class CompressRecovery {
             long ms = info.durationTicks() * 1000 / Math.max(1, info.timescale());
             // the file must end on a box boundary (FFmpeg may add an mfra index after the last fragment)
             return info.samples() > 0 && !com.clipforge.core.mp4.Mp4Reader.scan(temp).truncated()
-                    && Math.abs(ms - s.durationMs()) <= DURATION_TOLERANCE_MS;
+                    && Math.abs(ms - Math.round(s.durationMs() / speed)) <= DURATION_TOLERANCE_MS;
         } catch (IOException e) {
             return false;
         }

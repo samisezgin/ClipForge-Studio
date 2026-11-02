@@ -22,11 +22,16 @@ public final class CompressPlanner {
         String name = file.getFileName().toString();
         int dot = name.lastIndexOf('.');
         String stem = dot > 0 ? name.substring(0, dot) : name;
-        Path out = OutputNaming.unique(outputDir, stem + "_" + options.profile().shortName() + ".mp4", reserved);
+        Path out = OutputNaming.unique(outputDir, stem + "_" + tag(options) + ".mp4", reserved);
         // recording start with the same rules as scanned clips: file name, creation_time, file time minus duration
         long start = recordingStart(file, media);
         return new CompressSpec(List.of(CompressInput.of(file, media, start)), out.toString(), options,
                 media.duration().toMillis(), sizeBytes, media.hasAudio());
+    }
+
+    /** Name tag, e.g. {@code av1} or {@code av1_3x} for a sped-up video. */
+    private static String tag(CompressOptions o) {
+        return o.profile().shortName() + (o.spedUp() ? "_" + o.speedLabel() : "");
     }
 
     private static long recordingStart(Path file, MediaInfo media) {
@@ -48,7 +53,7 @@ public final class CompressPlanner {
     public static CompressSpec forClips(List<Clip> clips, Path outputDir, CompressOptions options,
                                         Collection<Path> reserved) throws IncompatibleClipsException {
         MergePlanner.requireCompatible(clips);
-        String base = OutputNaming.baseName(clips, options.profile().shortName(), "mp4");
+        String base = OutputNaming.baseName(clips, tag(options), "mp4");
         Path out = OutputNaming.unique(outputDir, base, reserved);
         return new CompressSpec(clips.stream().map(c -> CompressInput.of(c.path(), c.media(),
                         c.start().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli())).toList(),
