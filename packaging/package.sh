@@ -14,6 +14,6 @@ ICON=""
 jpackage --type "${1:-app-image}" --name "ClipForge Studio" --app-version "$VERSION" --vendor ClipForge \
   --dest dist --module-path "$JAR:clipforge-desktop/target/lib" \
   --module com.clipforge.desktop/com.clipforge.desktop.ClipForgeApp \
-  --java-options "--enable-native-access=javafx.graphics" \
+  --java-options "--enable-native-access=javafx.graphics,com.clipforge.core" \
   $ICON --description "Merge, speed up and compress videos"
 echo "Created $VERSION in dist/"

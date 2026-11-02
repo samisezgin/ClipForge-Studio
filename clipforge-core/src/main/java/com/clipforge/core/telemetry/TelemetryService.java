@@ -44,6 +44,28 @@ public final class TelemetryService {
         return Telemetry.NONE;
     }
 
+    /**
+     * Whether the file carries positions or speeds (the camera clock alone does not count). Cheap: reads the stream
+     * table and a few samples, never a whole data track.
+     */
+    public boolean hasData(Path file, Duration duration) {
+        try {
+            StreamTable streams = StreamTable.read(file, tools);
+            for (TelemetryParser p : parsers) {
+                try {
+                    if (p.hasData(file, streams, tools, duration)) {
+                        return true;
+                    }
+                } catch (IOException | RuntimeException e) {
+                    LOG.fine("Telemetry check " + p.id() + " failed for " + file.getFileName() + ": " + e);
+                }
+            }
+        } catch (IOException e) {
+            LOG.fine("No stream table for " + file.getFileName() + ": " + e.getMessage());
+        }
+        return false;
+    }
+
     /** Telemetry of consecutive clips on one timeline. */
     public Telemetry read(List<Path> clips, List<Duration> durations) throws IOException {
         List<Telemetry> parts = new ArrayList<>();

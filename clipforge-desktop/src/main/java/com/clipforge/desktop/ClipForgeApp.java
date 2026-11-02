@@ -2,16 +2,26 @@ package com.clipforge.desktop;
 
 import atlantafx.base.theme.PrimerDark;
 import atlantafx.base.theme.PrimerLight;
+import com.clipforge.core.ClipForge;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.project.RecoveryService;
 import com.clipforge.desktop.view.MainView;
+import com.clipforge.desktop.view.TextFit;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Scene;
+import javafx.scene.image.Image;
 import javafx.stage.Stage;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
+import java.util.logging.FileHandler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
 
 public class ClipForgeApp extends Application {
 
@@ -23,28 +33,28 @@ public class ClipForgeApp extends Application {
     /** Rotating log files in ~/.clipforge/logs (the packaged app has no console). */
     static void setUpLogging() {
         try {
-            java.nio.file.Path dir = AppSettings.homeDir().resolve("logs");
-            java.nio.file.Files.createDirectories(dir);
-            java.util.logging.FileHandler file = new java.util.logging.FileHandler(
+            Path dir = AppSettings.homeDir().resolve("logs");
+            Files.createDirectories(dir);
+            FileHandler file = new FileHandler(
                     dir.resolve("clipforge-%g.log").toString(), 5_000_000, 5, true);
             file.setEncoding("UTF-8");
-            file.setFormatter(new java.util.logging.SimpleFormatter());
-            java.util.logging.Logger root = java.util.logging.Logger.getLogger("");
+            file.setFormatter(new SimpleFormatter());
+            Logger root = Logger.getLogger("");
             root.addHandler(file);
-            root.setLevel(java.util.logging.Level.INFO);
-        } catch (java.io.IOException e) {
+            root.setLevel(Level.INFO);
+        } catch (IOException e) {
             System.err.println("Cannot write log files: " + e);
         }
-        Thread.setDefaultUncaughtExceptionHandler((t, e) -> java.util.logging.Logger.getLogger("ClipForge")
-                .log(java.util.logging.Level.SEVERE, "Uncaught exception in " + t.getName(), e));
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> Logger.getLogger("ClipForge")
+                .log(Level.SEVERE, "Uncaught exception in " + t.getName(), e));
     }
 
     @Override
     public void start(Stage stage) {
         this.stage = stage;
         setUpLogging();
-        java.util.logging.Logger.getLogger("ClipForge").info("Starting ClipForge Studio "
-                + com.clipforge.core.ClipForge.displayVersion());
+        Logger.getLogger("ClipForge").info("Starting ClipForge Studio "
+                + ClipForge.displayVersion());
         settings = AppSettings.user();
         Messages.use(initialLanguage(), AppSettings.languageDirs());
         applyTheme(settings.darkTheme());
@@ -58,7 +68,7 @@ public class ClipForgeApp extends Application {
         for (int size : new int[]{16, 24, 32, 48, 64, 128, 256}) {
             var url = ClipForgeApp.class.getResource("icons/icon-" + size + ".png");
             if (url != null) {
-                stage.getIcons().add(new javafx.scene.image.Image(url.toExternalForm()));
+                stage.getIcons().add(new Image(url.toExternalForm()));
             }
         }
         stage.setOnCloseRequest(e -> {
@@ -96,6 +106,7 @@ public class ClipForgeApp extends Application {
         view = new MainView(controller, stage, getHostServices(), this::changeLanguage, this::changeTheme);
         Scene scene = new Scene(view.root());
         scene.getStylesheets().add(ClipForgeApp.class.getResource("app.css").toExternalForm());
+        TextFit.installTruncationTooltips(scene);
         stage.setScene(scene);
     }
 

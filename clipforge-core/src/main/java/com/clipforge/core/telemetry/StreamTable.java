@@ -7,11 +7,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /** Streams and container tags of a file, plus helpers to read raw data packets with ffprobe. */
@@ -44,9 +47,31 @@ public record StreamTable(List<Stream> streams, Map<String, String> formatTags) 
 
     /** All packets of one stream with their payload bytes. */
     public static List<Packet> packets(Path file, int streamIndex, FfmpegTools tools) throws IOException {
-        JsonNode root = JSON.readTree(run(tools, List.of("-v", "error", "-print_format", "json",
+        return packets(file, streamIndex, tools, null);
+    }
+
+    /**
+     * A few packets of one stream: three each at the start, the middle and near the end of the video. Only those
+     * parts of the file are read (a GPS fix may come late, so the start alone is not enough).
+     */
+    public static List<Packet> samplePackets(Path file, int streamIndex, FfmpegTools tools, Duration duration)
+            throws IOException {
+        double total = Math.max(0, duration.toMillis() / 1000.0);
+        String intervals = String.format(Locale.ROOT, "%%+#3,%.3f%%+#3,%.3f%%+#3",
+                total / 2, Math.max(0, total - 15));
+        return packets(file, streamIndex, tools, intervals);
+    }
+
+    private static List<Packet> packets(Path file, int streamIndex, FfmpegTools tools, String readIntervals)
+            throws IOException {
+        List<String> args = new ArrayList<>(List.of("-v", "error", "-print_format", "json",
                 "-select_streams", String.valueOf(streamIndex), "-show_entries", "packet=pts_time,data",
-                "-show_data", file.toString())));
+                "-show_data"));
+        if (readIntervals != null) {
+            args.addAll(List.of("-read_intervals", readIntervals));
+        }
+        args.add(file.toString());
+        JsonNode root = JSON.readTree(run(tools, args));
         List<Packet> list = new ArrayList<>();
         for (JsonNode p : root.path("packets")) {
             list.add(new Packet(p.path("pts_time").asDouble(0), hexDump(p.path("data").asText(""))));
@@ -78,7 +103,7 @@ public record StreamTable(List<Stream> streams, Map<String, String> formatTags) 
         Process p = new ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start();
         p.getOutputStream().close();
         // read concurrently so the timeout also applies to an ffprobe that hangs without closing stdout
-        java.util.concurrent.CompletableFuture<byte[]> reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        CompletableFuture<byte[]> reader = CompletableFuture.supplyAsync(() -> {
             try {
                 return p.getInputStream().readAllBytes();
             } catch (IOException e) {

@@ -18,6 +18,7 @@ import com.clipforge.core.project.JobType;
 import com.clipforge.core.project.ProjectStore;
 import com.clipforge.core.project.RecoveryService;
 import com.clipforge.core.telemetry.TelemetryExport;
+import com.clipforge.core.telemetry.TelemetryService;
 import javafx.application.Platform;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -32,7 +33,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -267,7 +270,7 @@ class EndToEndTest {
                 2026-11-01 12:00:01.000
                 [latitude: 41.008300] [longitude: 28.978500] [rel_alt: 1.5 abs_alt: 50.5]
                 """, StandardCharsets.UTF_8);
-        var t = new com.clipforge.core.telemetry.TelemetryService(tools, java.time.ZoneOffset.UTC).read(video);
+        var t = new TelemetryService(tools, ZoneOffset.UTC).read(video);
         assertEquals(2, t.positionCount());
         int n = TelemetryExport.gpx(t, "drone", null, OUT.resolve("drone.gpx"));
         assertEquals(2, n);
@@ -376,7 +379,7 @@ class EndToEndTest {
     private static void deleteTree(Path dir) throws Exception {
         if (Files.exists(dir)) {
             try (var walk = Files.walk(dir)) {
-                for (Path p : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                for (Path p : walk.sorted(Comparator.reverseOrder()).toList()) {
                     Files.deleteIfExists(p);
                 }
             }

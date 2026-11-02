@@ -1,5 +1,6 @@
 package com.clipforge.core.project;
 
+import com.clipforge.core.merge.MergeService;
 import com.clipforge.core.util.OutputNaming;
 
 import java.io.IOException;
@@ -8,6 +9,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * Inspects a loaded project for interrupted work and prepares it for resumption.
@@ -35,7 +37,9 @@ public final class RecoveryService {
         List<Issue> issues = new ArrayList<>();
         for (JobRecord job : project.getJobs()) {
             if (job.getState().unfinished()) {
-                List<String> changed = java.util.stream.Stream.concat(job.getSources().stream(),
+                // sources deleted during the work at the user's request are gone on purpose
+                List<String> changed = Stream.concat(job.getSources().stream()
+                                        .filter(f -> !job.getDeletedSources().contains(f.path())),
                                 job.getMusicSources().stream())
                         .filter(f -> !f.matchesDisk()).map(Fingerprint::path).toList();
                 issues.add(new Issue(job, changed.isEmpty() ? Kind.INTERRUPTED : Kind.SOURCE_CHANGED, changed));
@@ -77,7 +81,7 @@ public final class RecoveryService {
                 return;
             }
             Files.deleteIfExists(part);
-            com.clipforge.core.merge.MergeService.discard(job.getMerge()); // also intermediate music files
+            MergeService.discard(job.getMerge()); // also intermediate music files
         }
         job.clearError();
         job.setState(JobState.PENDING);
@@ -88,19 +92,20 @@ public final class RecoveryService {
     public static void acceptChangedSources(JobRecord job) throws IOException {
         List<Fingerprint> refreshed = new ArrayList<>();
         for (Fingerprint f : job.getSources()) {
-            refreshed.add(Fingerprint.of(Path.of(f.path())));
+            refreshed.add(job.getDeletedSources().contains(f.path()) ? f : Fingerprint.of(Path.of(f.path())));
         }
         job.setSources(refreshed);
         List<Fingerprint> music = new ArrayList<>();
         for (Fingerprint f : job.getMusicSources()) {
             // a deleted track is left as it is: the job then reports which music file is missing
-            music.add(java.nio.file.Files.isRegularFile(Path.of(f.path())) ? Fingerprint.of(Path.of(f.path())) : f);
+            music.add(Files.isRegularFile(Path.of(f.path())) ? Fingerprint.of(Path.of(f.path())) : f);
         }
         job.setMusicSources(music);
     }
 
     /** {@code true} if one of the video sources (not only the music) changed. */
     public static boolean videoSourcesChanged(JobRecord job) {
-        return job.getSources().stream().anyMatch(f -> !f.matchesDisk());
+        return job.getSources().stream().filter(f -> !job.getDeletedSources().contains(f.path()))
+                .anyMatch(f -> !f.matchesDisk());
     }
 }

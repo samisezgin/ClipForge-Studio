@@ -3,6 +3,7 @@ package com.clipforge.core.compress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -37,7 +38,7 @@ public final class TimeOverlay {
      */
     public static String filter(Path font, long startEpochMs, long videoStartUs) {
         // fractional base: truncating to whole seconds would make the stamp up to one second early
-        String base = String.format(java.util.Locale.ROOT, "%.3f", (startEpochMs * 1000.0 - videoStartUs) / 1e6);
+        String base = String.format(Locale.ROOT, "%.3f", (startEpochMs * 1000.0 - videoStartUs) / 1e6);
         // size and position scale with the picture height (expressions are evaluated by drawtext)
         return "drawtext=fontfile='" + escape(font.toAbsolutePath().toString()) + "'"
                 + ":text='%{pts\\:localtime\\:" + base + "\\:%Y-%m-%d %H\\\\\\:%M\\\\\\:%S}'"

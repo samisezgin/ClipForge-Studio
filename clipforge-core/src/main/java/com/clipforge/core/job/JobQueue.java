@@ -63,13 +63,22 @@ public final class JobQueue {
     private final Set<CancellationToken> tokens = ConcurrentHashMap.newKeySet();
     private volatile CountDownLatch idleLatch = new CountDownLatch(0);
 
+    private final SourceCleanup cleanup;
+
     public JobQueue(Project project, Map<JobType, JobExecutor> executors, Runnable persist, Listener listener,
                     Clock clock) {
+        this(project, executors, persist, listener, clock, SourceCleanup.SYSTEM);
+    }
+
+    /** @param remover removes source files the user asked to delete (tests replace the Recycle Bin) */
+    public JobQueue(Project project, Map<JobType, JobExecutor> executors, Runnable persist, Listener listener,
+                    Clock clock, SourceCleanup.Remover remover) {
         this.project = project;
         this.executors = new EnumMap<>(executors);
         this.persist = persist;
         this.listener = listener;
         this.clock = clock;
+        this.cleanup = new SourceCleanup(project, remover, persist);
     }
 
     /** Merge-only queue (used by tests and simple callers). */
@@ -262,7 +271,9 @@ public final class JobQueue {
 
     private void runJob(JobRecord job) {
         // sources may have changed while the job was paused (not only between sessions): never mix old and new work
-        boolean changed = job.getSources().stream().anyMatch(f -> !f.matchesDisk())
+        // sources the user had deleted during the work are gone on purpose
+        boolean changed = job.getSources().stream()
+                .filter(f -> !job.getDeletedSources().contains(f.path())).anyMatch(f -> !f.matchesDisk())
                 || job.getMusicSources().stream().anyMatch(f -> !f.matchesDisk());
         if (changed) {
             synchronized (project) {
@@ -313,6 +324,11 @@ public final class JobQueue {
             }
         }
         persist.run();
+        if (outcome == JobExecutor.Outcome.DONE && job.getSourceDeletion() != null) {
+            cleanup.afterDone(job);
+            persist.run();
+            listener.jobChanged(job);
+        }
     }
 
     private JobContext context(JobRecord job) {
@@ -364,6 +380,15 @@ public final class JobQueue {
             @Override
             public Clock clock() {
                 return clock;
+            }
+
+            @Override
+            public void sourceDone(String path) {
+                if (job.getSourceDeletion() != null) {
+                    cleanup.sourceDone(job, path);
+                    persist.run();
+                    listener.jobChanged(job);
+                }
             }
         };
     }

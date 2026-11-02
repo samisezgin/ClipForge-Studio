@@ -2,6 +2,7 @@ package com.clipforge.desktop.view;
 
 import atlantafx.base.theme.Styles;
 import com.clipforge.core.audio.AudioMode;
+import com.clipforge.core.audio.MusicSettings;
 import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.compress.CompressSampler;
 import com.clipforge.core.compress.EncoderProfile;
@@ -11,6 +12,7 @@ import com.clipforge.core.util.Formats;
 import com.clipforge.desktop.AppController;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
+import javafx.scene.Cursor;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
@@ -31,7 +33,7 @@ import java.util.Set;
  * is chosen in the {@link PipelinePanel}; these settings are also used by a speed-up without compression, except the
  * quality (that one then keeps close to the source).
  */
-public final class CompressPanel extends VBox {
+public final class CompressPanel extends TabContent {
 
     /** Segment length choices in seconds; 0 = automatic. */
     private static final List<Integer> SEGMENT_CHOICES = List.of(0, 30, 60, 120, 300, 600);
@@ -81,11 +83,21 @@ public final class CompressPanel extends VBox {
         quality.box().setTooltip(qualityTip);
         Label qualityHint = new Label(Messages.get("compress.quality.hint"));
         qualityHint.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
+        qualityHint.setWrapText(true);
         for (int i = 0; i < bandLabels.length; i++) {
             Label l = new Label();
             l.getStyleClass().addAll("quality-band", Styles.TEXT_SMALL);
             l.setWrapText(true);
             l.setMaxWidth(Double.MAX_VALUE);
+            // a preset: clicking a range selects its lowest value (the best quality within it)
+            QualityBand band = QualityBand.values()[i];
+            l.setCursor(Cursor.HAND);
+            l.setOnMouseClicked(e -> {
+                EncoderProfile p = encoder.getValue();
+                if (p != null) {
+                    quality.setValue(p.range(band)[0]);
+                }
+            });
             bandLabels[i] = l;
             bands.getChildren().add(l);
         }
@@ -188,6 +200,7 @@ public final class CompressPanel extends VBox {
             Label l = bandLabels[b.ordinal()];
             int[] r = p.range(b);
             l.setText(Messages.get("compress.band.range", r[0], r[1], Messages.get("compress.band." + b.name())));
+            l.setTooltip(new Tooltip(Messages.get("compress.band.pick", r[0])));
             l.getStyleClass().remove("active");
             if (b == active) {
                 l.getStyleClass().add("active");
@@ -202,7 +215,7 @@ public final class CompressPanel extends VBox {
         // audio comes from the shared audio panel and the speed from the speed tab when the job is planned
         controller.setCompressOptions(new CompressOptions(encoder.getValue(), (int) Math.round(quality.getValue()),
                 segment.getValue() == null ? 0 : segment.getValue(), parallel.getValue(),
-                AudioMode.KEEP, com.clipforge.core.audio.MusicSettings.DEFAULT, overlay.isSelected()));
+                AudioMode.KEEP, MusicSettings.DEFAULT, overlay.isSelected()));
         sampleResult.setText("");
     }
 

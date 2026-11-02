@@ -10,12 +10,14 @@ import com.clipforge.core.model.MediaInfo;
 import com.clipforge.core.project.JobRecord;
 import com.clipforge.core.project.JobType;
 import com.clipforge.core.project.Project;
+import com.clipforge.core.telemetry.TelemetryService;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -35,7 +37,7 @@ class RealFootageCheck {
         String clips = System.getProperty("clipforge.realClips");
         assumeTrue(clips != null, "real footage not configured");
         FfmpegTools tools = FfmpegTestSupport.requireFfmpeg();
-        var t = new com.clipforge.core.telemetry.TelemetryService(tools, java.time.ZoneId.systemDefault())
+        var t = new TelemetryService(tools, ZoneId.systemDefault())
                 .read(Path.of(clips.split(";")[0]));
         System.out.printf("TELEMETRY: source=%s samples=%d positions=%d first=%s last=%s%n", t.source(),
                 t.samples().size(), t.positionCount(), t.samples().isEmpty() ? null : t.samples().getFirst(),

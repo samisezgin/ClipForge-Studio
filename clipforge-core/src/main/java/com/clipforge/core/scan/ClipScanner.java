@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -26,6 +27,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 /**
@@ -100,8 +103,8 @@ public final class ClipScanner {
                                     partial.accept(sortAndMark(found));
                                 } catch (RuntimeException e) {
                                     // a failing listener must not fail the scan; the final result still arrives
-                                    java.util.logging.Logger.getLogger(ClipScanner.class.getName())
-                                            .log(java.util.logging.Level.WARNING, "Partial scan listener failed", e);
+                                    Logger.getLogger(ClipScanner.class.getName())
+                                            .log(Level.WARNING, "Partial scan listener failed", e);
                                 }
                             }
                         }
@@ -148,7 +151,7 @@ public final class ClipScanner {
      * The first occurrence (in folder order) stays, later ones become {@link ClipStatus#DUPLICATE}.
      */
     static List<Clip> markDuplicates(List<Clip> clips) {
-        Set<String> seen = new java.util.HashSet<>();
+        Set<String> seen = new HashSet<>();
         List<Clip> result = new ArrayList<>(clips.size());
         for (Clip c : clips) {
             String key = c.channel() + "|" + c.start() + "|" + c.size();

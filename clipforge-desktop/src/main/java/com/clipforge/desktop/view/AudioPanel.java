@@ -6,6 +6,9 @@ import com.clipforge.core.audio.MusicSettings;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.util.Formats;
 import com.clipforge.desktop.AppController;
+import javafx.beans.binding.Bindings;
+import javafx.event.ActionEvent;
+import javafx.event.EventHandler;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -94,7 +97,7 @@ public final class AudioPanel extends TitledPane {
         var selected = tracks.getSelectionModel().selectedIndexProperty();
         del.disableProperty().bind(selected.lessThan(0));
         up.disableProperty().bind(selected.lessThan(1));
-        down.disableProperty().bind(selected.lessThan(0).or(javafx.beans.binding.Bindings.createBooleanBinding(
+        down.disableProperty().bind(selected.lessThan(0).or(Bindings.createBooleanBinding(
                 () -> selected.get() >= tracks.getItems().size() - 1, selected, tracks.getItems())));
         HBox trackButtons = new HBox(4, add, del, up, down);
         trackButtons.setAlignment(Pos.CENTER_LEFT);
@@ -178,7 +181,7 @@ public final class AudioPanel extends TitledPane {
         return h;
     }
 
-    private static Button small(String key, javafx.event.EventHandler<javafx.event.ActionEvent> action) {
+    private static Button small(String key, EventHandler<ActionEvent> action) {
         Button b = new Button(Messages.get(key));
         b.getStyleClass().add(Styles.SMALL);
         b.setOnAction(action);

@@ -1,5 +1,6 @@
 package com.clipforge.core.telemetry;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -35,12 +36,12 @@ public record Telemetry(String source, List<TelemetrySample> samples) {
     }
 
     /** Joins the telemetry of consecutive clips; each clip's offsets are shifted by the clips before it. */
-    public static Telemetry join(List<Telemetry> parts, List<java.time.Duration> clipDurations) {
+    public static Telemetry join(List<Telemetry> parts, List<Duration> clipDurations) {
         if (parts.size() != clipDurations.size()) {
             throw new IllegalArgumentException("one duration per clip required");
         }
         List<TelemetrySample> all = new ArrayList<>();
-        java.time.Duration offset = java.time.Duration.ZERO;
+        Duration offset = Duration.ZERO;
         String source = "none";
         for (int i = 0; i < parts.size(); i++) {
             Telemetry t = parts.get(i);

@@ -19,6 +19,18 @@
     -fx-border-color: -color-border-default transparent transparent transparent;
 }
 
+/* "Delete permanently": impossible to overlook */
+.delete-warning {
+    -fx-text-fill: -color-danger-fg;
+    -fx-background-color: -color-danger-subtle;
+    -fx-border-color: -color-danger-emphasis;
+    -fx-border-width: 2;
+    -fx-border-radius: 4;
+    -fx-background-radius: 4;
+    -fx-padding: 8 10 8 10;
+    -fx-font-weight: bold;
+}
+
 .pipeline-panel {
     -fx-background-color: -color-bg-default;
     -fx-border-color: -color-border-default;
@@ -32,6 +44,11 @@
     -fx-border-width: 1.5;
     -fx-border-radius: 4;
     -fx-text-fill: -color-fg-muted;
+}
+
+.quality-band:hover {
+    -fx-background-color: -color-bg-subtle;
+    -fx-border-color: -color-border-default;
 }
 
 /* the band the current quality value falls into */

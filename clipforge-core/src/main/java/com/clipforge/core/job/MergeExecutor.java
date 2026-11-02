@@ -1,5 +1,6 @@
 package com.clipforge.core.job;
 
+import com.clipforge.core.audio.MusicRenderer;
 import com.clipforge.core.ffmpeg.CancellationToken;
 import com.clipforge.core.ffmpeg.FfmpegResult;
 import com.clipforge.core.merge.MergeService;
@@ -42,7 +43,7 @@ public final class MergeExecutor implements JobExecutor {
             FfmpegResult r;
             try {
                 r = merge.merge(spec, ctx::progress, token);
-            } catch (com.clipforge.core.audio.MusicRenderer.TrackException e) {
+            } catch (MusicRenderer.TrackException e) {
                 return fail(job, ctx, "error.musicTrack", null, e.track());
             }
             if (r.success() && Files.isRegularFile(out)) {

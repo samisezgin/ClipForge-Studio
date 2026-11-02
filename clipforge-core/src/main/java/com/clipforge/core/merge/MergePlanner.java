@@ -9,8 +9,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.LinkedHashSet;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,8 +39,22 @@ public final class MergePlanner {
     public static List<MergeSpec> plan(List<Session> sessions, Set<Path> selected, MergeMode mode, Path outputDir,
                                        MergeOptions options, Collection<Path> reserved)
             throws IncompatibleClipsException {
+        return plan(sessions, selected, mode, outputDir, options, reserved, List.of());
+    }
+
+    /**
+     * @param order the user's order for {@link MergeMode#FREE}; clips not in it follow by recording time
+     */
+    public static List<MergeSpec> plan(List<Session> sessions, Set<Path> selected, MergeMode mode, Path outputDir,
+                                       MergeOptions options, Collection<Path> reserved, List<Path> order)
+            throws IncompatibleClipsException {
         List<List<Clip>> groups = new ArrayList<>();
-        if (mode == MergeMode.PER_SESSION) {
+        if (mode == MergeMode.FREE) {
+            List<Clip> all = ordered(sessions, selected, order);
+            if (!all.isEmpty()) {
+                groups.add(all);
+            }
+        } else if (mode == MergeMode.PER_SESSION) {
             for (Session s : sessions) {
                 List<Clip> picked = pick(s.clips(), selected);
                 if (!picked.isEmpty()) {
@@ -79,6 +94,35 @@ public final class MergePlanner {
 
     private static List<Clip> pick(List<Clip> clips, Set<Path> selected) {
         return clips.stream().filter(Clip::selectable).filter(c -> selected.contains(c.path())).toList();
+    }
+
+    /**
+     * The selected clips of all sessions in the user's order: listed paths first, as listed; the rest by recording
+     * time (e.g. clips selected after the order was set).
+     */
+    public static List<Clip> ordered(List<Session> sessions, Set<Path> selected, List<Path> order) {
+        List<Clip> picked = new ArrayList<>();
+        for (Session s : sessions) {
+            picked.addAll(pick(s.clips(), selected));
+        }
+        Map<Path, Integer> rank = new HashMap<>();
+        for (int i = 0; i < order.size(); i++) {
+            rank.putIfAbsent(order.get(i), i);
+        }
+        picked.sort(Comparator.comparingInt((Clip c) -> rank.getOrDefault(c.path(), Integer.MAX_VALUE))
+                .thenComparing(Clip::start).thenComparingLong(Clip::sequence)
+                .thenComparing(c -> c.path().toString()));
+        return picked;
+    }
+
+    /** {@code true} if the clips can be stream-copied together (same codec, resolution and audio format). */
+    public static boolean compatible(List<Clip> clips) {
+        try {
+            requireCompatible(clips);
+            return true;
+        } catch (IncompatibleClipsException e) {
+            return false;
+        }
     }
 
     /** All clips must share codec and resolution to be stream-copied together. */

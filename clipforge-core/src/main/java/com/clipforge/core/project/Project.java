@@ -34,6 +34,26 @@ public final class Project {
     private boolean stepSpeed;
     private boolean stepCompress;
     private double speedFactor = 2;
+    /** Ask how to delete the sources when starting (the choice itself is made in a dialog, per start). */
+    private boolean deleteSources;
+    /** The user's order of clips for a free merge (absolute paths). */
+    private List<String> mergeOrder = new ArrayList<>();
+
+    public List<String> getMergeOrder() {
+        return mergeOrder;
+    }
+
+    public void setMergeOrder(List<String> mergeOrder) {
+        this.mergeOrder = mergeOrder == null ? new ArrayList<>() : new ArrayList<>(mergeOrder);
+    }
+
+    public boolean isDeleteSources() {
+        return deleteSources;
+    }
+
+    public void setDeleteSources(boolean deleteSources) {
+        this.deleteSources = deleteSources;
+    }
 
     public boolean isStepMerge() {
         return stepMerge;

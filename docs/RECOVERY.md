@@ -51,3 +51,18 @@ cancelled jobs from the list does the same.
 ## Merge jobs (phase 1)
 Merging is stream copy and takes seconds to minutes, so it resumes per output file: finished outputs are skipped,
 a partially written output and its work folder are deleted and redone.
+
+## Deleting source files (1.2)
+
+Optional, chosen per start in a dialog; nothing is deleted unless the user asked for it.
+
+- **After the work**: when a job is DONE and its output exists, is not empty and ends on a complete MP4 box, its
+  sources are deleted.
+- **During the work** (jobs that re-encode only): a source is deleted once every segment of it is APPENDED, i.e.
+  written, flushed and committed in the project file, and the audio track (taken from all sources) is ready.
+- **Recycle Bin** by default (the Windows shell is asked to warn before deleting permanently, e.g. on a USB stick or
+  for a file too large for the bin; declining keeps the file). **Permanent** only when ticked, with a warning.
+- A source is **kept** when another unfinished job still needs it or when it changed since the job was created.
+- Deleted sources are recorded in the job (`deletedSources`): source checks and the recovery dialog skip them. If
+  recovery needs a deleted source again (scenario 3, damaged output), the job fails with "source deleted" instead of
+  encoding something else; the output up to the committed point stays playable.

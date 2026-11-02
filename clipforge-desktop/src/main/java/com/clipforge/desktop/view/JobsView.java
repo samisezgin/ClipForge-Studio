@@ -1,15 +1,17 @@
 package com.clipforge.desktop.view;
 
 import atlantafx.base.theme.Styles;
+import com.clipforge.core.compress.CompressState;
 import com.clipforge.core.ffmpeg.Progress;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.project.JobRecord;
-import com.clipforge.core.compress.CompressState;
 import com.clipforge.core.project.JobState;
 import com.clipforge.core.project.JobType;
-import com.clipforge.core.util.OutputNaming;
 import com.clipforge.core.util.Formats;
+import com.clipforge.core.util.OutputNaming;
 import com.clipforge.desktop.AppController;
+import javafx.animation.Animation;
+import javafx.animation.PauseTransition;
 import javafx.application.HostServices;
 import javafx.collections.MapChangeListener;
 import javafx.geometry.Insets;
@@ -28,6 +30,8 @@ import javafx.scene.layout.VBox;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Job queue with per-job progress and queue controls (pause / stop now / resume). */
 public final class JobsView extends VBox {
@@ -76,10 +80,10 @@ public final class JobsView extends VBox {
         VBox.setVgrow(list, Priority.ALWAYS);
 
         // progress arrives several times per second: refresh the list at most ~4 times per second
-        javafx.animation.PauseTransition throttle = new javafx.animation.PauseTransition(javafx.util.Duration.millis(250));
+        PauseTransition throttle = new PauseTransition(javafx.util.Duration.millis(250));
         throttle.setOnFinished(e -> list.refresh());
         listeners.on(controller.progress(), (MapChangeListener<String, Progress>) c -> {
-            if (throttle.getStatus() != javafx.animation.Animation.Status.RUNNING) {
+            if (throttle.getStatus() != Animation.Status.RUNNING) {
                 throttle.playFromStart();
             }
         });
@@ -185,6 +189,11 @@ public final class JobsView extends VBox {
                     }
                 }
             }
+            // what happened to the sources the user asked to delete
+            String deleted = deletionText(job);
+            if (deleted != null) {
+                detail.setText(detail.getText() + " · " + deleted);
+            }
             bar.setVisible(s == JobState.RUNNING);
             bar.setManaged(s == JobState.RUNNING);
             cancel.setVisible(s.unfinished());
@@ -220,6 +229,26 @@ public final class JobsView extends VBox {
             } catch (Exception e) {
                 return -1;
             }
+        }
+
+        /** "12 source files moved to the Recycle Bin · 1 kept", or {@code null} if nothing was to be deleted. */
+        private static String deletionText(JobRecord job) {
+            if (job.getSourceDeletion() == null) {
+                return null;
+            }
+            List<String> parts = new ArrayList<>();
+            int deleted = job.getDeletedSources().size();
+            if (deleted > 0) {
+                parts.add(Messages.get(job.getSourceDeletion().permanent() ? "jobs.deleted.permanent" : "jobs.deleted",
+                        deleted));
+            }
+            if (!job.getKeptSources().isEmpty()) {
+                parts.add(Messages.get("jobs.kept", job.getKeptSources().size()));
+            }
+            if (job.getKeptPartial() != null) {
+                parts.add(Messages.get("jobs.partialKept", Path.of(job.getKeptPartial()).getFileName()));
+            }
+            return parts.isEmpty() ? null : String.join(" · ", parts);
         }
     }
 }

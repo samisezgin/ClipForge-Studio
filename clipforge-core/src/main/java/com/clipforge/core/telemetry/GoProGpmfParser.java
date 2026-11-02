@@ -49,6 +49,23 @@ public final class GoProGpmfParser implements TelemetryParser {
         return samples.isEmpty() ? Optional.empty() : Optional.of(new Telemetry(id(), samples));
     }
 
+    /** A few GPMF packets (start, middle, end) are enough to see whether the GPS had a fix. */
+    @Override
+    public boolean hasData(Path file, StreamTable streams, FfmpegTools tools, Duration duration) throws IOException {
+        Optional<StreamTable.Stream> gpmd = streams.streams().stream()
+                .filter(s -> s.codecTag().equals("gpmd")).findFirst();
+        if (gpmd.isEmpty()) {
+            return false;
+        }
+        for (StreamTable.Packet p : StreamTable.samplePackets(file, gpmd.get().index(), tools, duration)) {
+            if (parsePacket(p.data(), p.time(), 1.0).stream()
+                    .anyMatch(s -> s.hasPosition() || s.speedKmh() != null)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Parses one GPMF payload; GPS samples are spread evenly over the packet's duration. */
     static List<TelemetrySample> parsePacket(byte[] data, double start, double length) {
         List<TelemetrySample> out = new ArrayList<>();

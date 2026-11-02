@@ -1,6 +1,8 @@
 package com.clipforge.core.compress;
 
 import com.clipforge.core.mp4.FragmentedMp4;
+import com.clipforge.core.mp4.Mp4Reader;
+import com.clipforge.core.project.JobRecord;
 import com.clipforge.core.util.OutputNaming;
 
 import java.io.IOException;
@@ -171,7 +173,7 @@ public final class CompressRecovery {
             FragmentedMp4.Info info = FragmentedMp4.inspect(temp);
             long ms = info.durationTicks() * 1000 / Math.max(1, info.timescale());
             // the file must end on a box boundary (FFmpeg may add an mfra index after the last fragment)
-            return info.samples() > 0 && !com.clipforge.core.mp4.Mp4Reader.scan(temp).truncated()
+            return info.samples() > 0 && !Mp4Reader.scan(temp).truncated()
                     && Math.abs(ms - Math.round(s.durationMs() / speed)) <= DURATION_TOLERANCE_MS;
         } catch (IOException e) {
             return false;
@@ -190,16 +192,54 @@ public final class CompressRecovery {
         state.setMeasuredSpeed(0);
     }
 
-    /** Deletes the job's partial files of any job state: used when a compression job is cancelled or removed. */
-    public static void discard(com.clipforge.core.project.JobRecord job) {
+    /**
+     * Like {@link #restart(CompressState)}, but if sources were already deleted during the work the growing output
+     * is their only copy: it is kept next to the output instead of being deleted.
+     */
+    public static void restart(JobRecord job) throws IOException {
+        preservePartial(job);
+        restart(job.getCompress());
+    }
+
+    /**
+     * Deletes the job's partial files of any job state: used when a compression job is cancelled or removed. If
+     * sources were deleted during the work, the growing output is kept (see {@link #preservePartial}).
+     */
+    public static void discard(JobRecord job) {
         if (job.getCompress() == null || job.getCompress().getSpec() == null) {
             return;
         }
         try {
+            preservePartial(job);
             cleanUp(job.getCompress().getSpec(), false);
         } catch (IOException e) {
             LOG.warning("Cannot remove partial files of " + job.output() + ": " + e.getMessage());
         }
+    }
+
+    /**
+     * Sources deleted during the work exist only in the growing output. Before it would be thrown away (cancel,
+     * remove, start over), it is renamed to {@code <name>_incomplete.mp4} next to the output and stays playable.
+     *
+     * @return the kept file, or {@code null} if nothing needed keeping
+     */
+    public static Path preservePartial(JobRecord job) throws IOException {
+        if (job.getDeletedSources().isEmpty() || job.getCompress() == null || job.getCompress().getSpec() == null) {
+            return null;
+        }
+        Path part = partFile(job.getCompress().getSpec());
+        if (!Files.isRegularFile(part) || Files.size(part) == 0) {
+            return null;
+        }
+        Path out = Path.of(job.getCompress().getSpec().output());
+        String name = out.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        String stem = dot > 0 ? name.substring(0, dot) : name;
+        Path kept = OutputNaming.unique(out.getParent(), stem + "_incomplete.mp4", List.of());
+        Files.move(part, kept); // never replaces an existing file
+        job.setKeptPartial(kept.toString());
+        LOG.warning("Sources were deleted during the work; kept the partial output as " + kept);
+        return kept;
     }
 
     /** Deletes the work folder and the growing output (job cancelled or finished). */
