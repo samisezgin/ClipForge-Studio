@@ -34,6 +34,11 @@
     -fx-text-fill: -color-fg-muted;
 }
 
+.quality-band:hover {
+    -fx-background-color: -color-bg-subtle;
+    -fx-border-color: -color-border-default;
+}
+
 /* the band the current quality value falls into */
 .quality-band.active {
     -fx-text-fill: -color-success-fg;

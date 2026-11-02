@@ -81,11 +81,21 @@ public final class CompressPanel extends VBox {
         quality.box().setTooltip(qualityTip);
         Label qualityHint = new Label(Messages.get("compress.quality.hint"));
         qualityHint.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
+        qualityHint.setWrapText(true);
         for (int i = 0; i < bandLabels.length; i++) {
             Label l = new Label();
             l.getStyleClass().addAll("quality-band", Styles.TEXT_SMALL);
             l.setWrapText(true);
             l.setMaxWidth(Double.MAX_VALUE);
+            // a preset: clicking a range selects its lowest value (the best quality within it)
+            QualityBand band = QualityBand.values()[i];
+            l.setCursor(javafx.scene.Cursor.HAND);
+            l.setOnMouseClicked(e -> {
+                EncoderProfile p = encoder.getValue();
+                if (p != null) {
+                    quality.setValue(p.range(band)[0]);
+                }
+            });
             bandLabels[i] = l;
             bands.getChildren().add(l);
         }
@@ -188,6 +198,7 @@ public final class CompressPanel extends VBox {
             Label l = bandLabels[b.ordinal()];
             int[] r = p.range(b);
             l.setText(Messages.get("compress.band.range", r[0], r[1], Messages.get("compress.band." + b.name())));
+            l.setTooltip(new Tooltip(Messages.get("compress.band.pick", r[0])));
             l.getStyleClass().remove("active");
             if (b == active) {
                 l.getStyleClass().add("active");
