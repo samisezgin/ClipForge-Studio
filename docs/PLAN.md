@@ -1,0 +1,61 @@
+# ClipForge Studio — Implementation Plan
+
+## Context
+General-purpose tool for segmented video (dash cams, phones, GoPro, screen recordings). The first test data set is a
+dash cam producing ~2 min / 160 MB segments named like `NO20261101-233933-004116F.mp4`: HEVC 2304x1296 ~29.8 fps (VFR)
+~10 Mbps, AAC 16 kHz mono (≈1 s shorter than video), and SigmaStar metadata data streams (`ssmd`).
+
+Goals:
+1. Merge segments losslessly — one file per continuous session (default) or all selected clips into one, across days.
+2. Remove audio or replace it with (looping) background music.
+3. Compress 45–50 GB recordings with little visible quality loss.
+
+**Why FFmpeg and not a custom encoder:** HandBrake itself encodes through FFmpeg's libav* plus x265 / NVENC / SVT-AV1;
+its C# layer is UI only. ClipForge drives the same engine via the `ffmpeg` CLI, so the UI language (Java) has no
+performance impact.
+
+## Architecture
+- Maven multi-module: `clipforge-core` (no UI dependencies; future `clipforge-web` will reuse it) and
+  `clipforge-desktop` (JavaFX 27 + AtlantaFX).
+- FFmpeg is called through `ProcessBuilder` (never via `cmd.exe`), progress via `-progress pipe:1`, all I/O in UTF-8.
+- i18n: `ResourceBundle` (`messages.properties` = English default, `messages_tr.properties` = Turkish). Extra languages
+  are discovered from the classpath and from a `lang/` folder next to the application.
+
+## Phase 1 — Scanning + lossless merge (v0.1.0)
+- `Clip`, `Session` models; `TimestampResolver` (file-name patterns → ffprobe `creation_time` → file mtime);
+  `ClipScanner` (multiple folders, marks files still being copied / unreadable, rescan);
+  session split when `next.start > prev.start + prev.duration + 5 s`; channel (F/R) and codec/resolution split groups.
+- `MergeService`: UTF-8 concat list, `-map 0:v -map 0:a? -ignore_unknown -c copy`, `-fflags +genpts` retry,
+  optional `+faststart`, experimental "keep data streams" (MKV + `-copy_unknown`).
+- `FfmpegLocator`, `FfmpegJob` (progress/ETA/cancel), `DiskCheck` (free space, FAT32 4 GB limit).
+- UI: add folders, Day ▸ Session ▸ Clip tree with checkboxes and gap markers, merge mode, output folder, job queue.
+- Project file (`.cfproj`, JSON) with folders, selections, settings, job queue and job states; atomic auto-save;
+  recovery prompt on startup. Merge jobs resume per output file.
+
+## Phase 2 — Compression (v0.2.0)
+- Profiles: AV1 NVENC (default, `-preset p6 -tune hq -rc vbr -cq 28 -b:v 0 -multipass qres -spatial-aq 1 -temporal-aq 1`),
+  HEVC NVENC, SVT-AV1 (`-preset 6 -crf 30`), x265 (`-preset medium -crf 24`). NVENC self-test at startup.
+- Quality slider + "encode 60 s sample" to estimate final size/time.
+- **Segmented encoding with a growing output:** the input timeline is cut into fixed time segments independent of
+  source clip length (auto length ≈ 45–60 s of work per segment, or manual 30 s–10 min), keyframe aligned.
+  Each segment is encoded to a fragmented MP4 in `<project>.work/`, then appended in order to the main fragmented MP4
+  output (only `moof/mdat` boxes, `mfhd` renumbered). The output grows while encoding and is playable at any time.
+  Audio is prepared once as a separate track and copied per segment. Up to 2 concurrent segments on NVENC.
+- Pause / resume / crash recovery — see [RECOVERY.md](RECOVERY.md).
+- Optional final remux to standard MP4 (`+faststart`).
+
+## Phase 3 — Audio (v0.3.0)
+- Keep / remove (`-an`) / background music (video stream-copied, only audio encoded, AAC 192k stereo).
+- Music playlist, volume, optional fade-out (checkbox + seconds, default 3 s), loop switch (default on) with
+  crossfade (0–3 s) built via `acrossfade` chains in a `-filter_complex_script`; long videos use a seamless loop block
+  with `-stream_loop -1`. No `-shortest` (it would cut the video); `apad` + `atrim` instead.
+- Optional: mix original audio quietly under the music (`amix`).
+
+## Phase 4 — Telemetry and extras (v0.4.0)
+- Pluggable `TelemetryParser` (SigmaStar dash cam meta, GoPro GPMF, DJI `.SRT`, phone location tag).
+- Map (Leaflet in WebView), speed/acceleration charts, GPX/CSV export, optional date/time/speed overlay (`drawtext`).
+- Folder watching, `jpackage` app-image distribution.
+
+## Verification
+Unit tests for parsing/grouping/persistence; integration tests on small synthetic clips generated with FFmpeg's
+`lavfi` sources; a final end-to-end test with small files only.
