@@ -29,8 +29,12 @@ public final class SpeedPanel extends VBox {
         setSpacing(10);
         setPadding(new Insets(12, 0, 0, 0));
 
-        speed = new SliderBox(CompressOptions.MIN_SPEED, CompressOptions.MAX_SPEED, SLIDER_MAX, 0.25,
+        // two decimals like the stored factor (e.g. 1.1x); the box arrows still step by 0.25
+        speed = new SliderBox(CompressOptions.MIN_SPEED, CompressOptions.MAX_SPEED, SLIDER_MAX, 0.01,
                 controller.speedFactor());
+        ((javafx.scene.control.SpinnerValueFactory.DoubleSpinnerValueFactory) speed.box().getValueFactory())
+                .setAmountToStepBy(0.25);
+        speed.slider().setBlockIncrement(0.25);
         Tooltip tip = new Tooltip(Messages.get("speed.factor.tip"));
         speed.slider().setTooltip(tip);
         speed.box().setTooltip(tip);

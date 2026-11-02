@@ -5,6 +5,29 @@ each development phase is a minor release.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-02
+### Added
+- **Steps panel**: tick Merge, Speed up and Compress in any combination and start them with one button. Merge alone
+  stays lossless; with speed-up or compression the clips are joined while encoding (no intermediate file), or each
+  clip is processed on its own when Merge is not ticked. The source (selected clips or one file) is chosen here.
+- **Speed up** tab: 1×–100× (slider up to 10×, any value can be typed, decimals allowed). The source frame rate is
+  kept, the original sound is sped up with its pitch kept, background music plays at normal speed, the date/time
+  stamp keeps the real recording time, output names get e.g. `_2.5x`. Resumable like compression. A speed-up without
+  compression is encoded close to the source quality.
+- Quality has a box for exact values next to the slider; all quality ranges of the chosen encoder are listed and the
+  current one is highlighted.
+- The clip list fills in while scanning instead of after the whole scan.
+- Application logo: window and taskbar icon, About dialog, packaged app icon.
+
+### Changed
+- The Merge and Compress tabs hold settings only; everything starts from the steps panel.
+
+### Fixed
+- Merged files written by the project could not be listed for compressing them next; finished outputs are now listed
+  (not selected automatically), only outputs still being written stay hidden.
+- Large fragmented MP4 files (e.g. merge outputs of several GB) showed as unreadable on a slow or busy disk because
+  probing timed out; the probe time now grows with the file size.
+
 ## [1.0.0] - 2026-11-02
 First stable release: all four planned phases (scanning and lossless merge, segmented resumable compression, audio,
 telemetry and extras) are complete and reviewed.

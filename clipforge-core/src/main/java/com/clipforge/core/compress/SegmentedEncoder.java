@@ -419,7 +419,9 @@ public final class SegmentedEncoder implements JobExecutor {
         FfmpegResult r = FfmpegProcess.run(cmd, total, p -> {
             // out_time is not usable with -copyts; frames are (one output frame per `speed` source frames)
             long ms = Math.min(s.durationMs(), Math.round(p.frames() / fps * 1000 * o.speed()));
-            progress.accept(new Progress(Duration.ofMillis(ms), total, p.speed(), p.outputBytes(), p.frames()));
+            // FFmpeg's speed is in output time; the job counts source time
+            progress.accept(new Progress(Duration.ofMillis(ms), total, p.speed() * o.speed(), p.outputBytes(),
+                    p.frames()));
         }, token);
         Files.deleteIfExists(vfFile);
         if (r.success() && !CompressRecovery.validSegment(temp, s, o.speed())) {

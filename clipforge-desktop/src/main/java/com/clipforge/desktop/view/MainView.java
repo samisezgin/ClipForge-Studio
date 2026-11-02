@@ -230,6 +230,8 @@ public final class MainView {
         Label label = new Label(Messages.get("folders.label"));
         label.getStyleClass().add(Styles.TEXT_MUTED);
         listeners.on(controller.folders(), (ListChangeListener<String>) c -> refreshFolders());
+        // a plan for the previous project is dropped without calling back: do not keep blocking Start
+        listeners.on(controller.projectVersionProperty(), (o, a, b) -> startingCompress = false);
         listeners.on(controller.pendingRecoveryProperty(), (o, a, b) -> {
             if (b != null && !b.isEmpty()) {
                 controller.pendingRecoveryProperty().set(null);
@@ -476,6 +478,14 @@ public final class MainView {
         a.setHeaderText(ClipForge.NAME + " " + ClipForge.displayVersion());
         String ffmpeg = controller.toolsProperty().get() == null ? "-" : controller.toolsProperty().get().version();
         a.setContentText(Messages.get("about.text", ffmpeg));
+        var logo = MainView.class.getResource("/com/clipforge/desktop/logo.png");
+        if (logo != null) {
+            javafx.scene.image.ImageView view = new javafx.scene.image.ImageView(logo.toExternalForm());
+            view.setFitWidth(180);
+            view.setPreserveRatio(true);
+            view.setSmooth(true);
+            a.setGraphic(view);
+        }
         a.showAndWait();
     }
 

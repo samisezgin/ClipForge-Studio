@@ -414,6 +414,8 @@ public final class AppController {
         synchronized (project) {
             project.getFolders().remove(dir);
         }
+        // a scan still running includes the removed folder: drop its results (also the partial ones)
+        scanGeneration++;
         folders.setAll(project.getFolders());
         scheduleSave();
         refreshWatch();
@@ -917,8 +919,9 @@ public final class AppController {
         }
         if (!compress) {
             EncoderProfile p = o.profile();
+            // only the quality changes: the date/time stamp and the other settings still apply
             o = new CompressOptions(p, p.range(com.clipforge.core.compress.QualityBand.TRANSPARENT)[1],
-                    o.segmentSeconds(), o.concurrency(), AudioMode.KEEP);
+                    o.segmentSeconds(), o.concurrency(), o.audio(), o.music(), o.overlayTime(), o.speed());
         }
         if (project.isStepSpeed()) {
             o = o.withSpeed(project.getSpeedFactor());

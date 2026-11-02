@@ -40,6 +40,7 @@ public final class ClipScanner {
 
     /** A file modified more recently than this is considered still being copied. */
     public static final Duration COPYING_THRESHOLD = Duration.ofSeconds(30);
+    private static final long PARTIAL_INTERVAL_NANOS = 200_000_000L;
 
     private final ProbeService probe;
     private final TimestampResolver timestamps;
@@ -65,8 +66,9 @@ public final class ClipScanner {
     /**
      * Like {@link #scan(List, BiConsumer)}, but also reports partial results while probing.
      *
-     * @param partial called after each probed file with the clips found so far, sorted and with duplicates marked
-     *                like the final result; may be {@code null}. Calls never run concurrently.
+     * @param partial called while probing (at most every 200 ms, and after the last file) with the clips found so
+     *                far, sorted and with duplicates marked like the final result; may be {@code null}. Calls never
+     *                run concurrently.
      */
     public List<Clip> scan(List<Path> folders, BiConsumer<Integer, Integer> progress,
                            Consumer<List<Clip>> partial) throws IOException {
@@ -74,6 +76,8 @@ public final class ClipScanner {
         AtomicInteger done = new AtomicInteger();
         Object progressLock = new Object();
         int[] reported = {0};
+        long[] lastPartial = {Long.MIN_VALUE / 2};
+        int[] handled = {0};
         List<Clip> found = new ArrayList<>(files.size()); // guarded by progressLock
         List<Clip> clips = new ArrayList<>(files.size());
         try (ExecutorService pool = Executors.newFixedThreadPool(parallelism)) {
@@ -87,7 +91,19 @@ public final class ClipScanner {
                             if (c != null) {
                                 found.add(c);
                             }
-                            partial.accept(sortAndMark(found));
+                            // sorting everything per file is quadratic: report at most every 200 ms (and at the end)
+                            long now = System.nanoTime();
+                            boolean last = ++handled[0] == files.size(); // counted under the lock: really the last
+                            if (last || now - lastPartial[0] >= PARTIAL_INTERVAL_NANOS) {
+                                lastPartial[0] = now;
+                                try {
+                                    partial.accept(sortAndMark(found));
+                                } catch (RuntimeException e) {
+                                    // a failing listener must not fail the scan; the final result still arrives
+                                    java.util.logging.Logger.getLogger(ClipScanner.class.getName())
+                                            .log(java.util.logging.Level.WARNING, "Partial scan listener failed", e);
+                                }
+                            }
                         }
                         if (progress != null && n > reported[0]) {
                             reported[0] = n;

@@ -67,9 +67,10 @@ class MergeIntegrationTest {
                 Clock.systemDefaultZone());
         List<List<Clip>> snapshots = new java.util.ArrayList<>();
         List<Clip> clips = scanner.scan(List.of(folder), null, snapshots::add);
-        assertEquals(4, snapshots.size());
-        for (int i = 0; i < snapshots.size(); i++) {
-            assertEquals(i + 1, snapshots.get(i).size());
+        // throttled to one call per 200 ms, plus one after the last file
+        assertTrue(!snapshots.isEmpty() && snapshots.size() <= 4, String.valueOf(snapshots.size()));
+        for (int i = 1; i < snapshots.size(); i++) {
+            assertTrue(snapshots.get(i).size() >= snapshots.get(i - 1).size(), "snapshots only grow");
         }
         assertEquals(clips, snapshots.getLast()); // the last snapshot is the final, sorted result
     }
