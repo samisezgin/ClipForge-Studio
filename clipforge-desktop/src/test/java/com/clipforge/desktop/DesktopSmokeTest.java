@@ -211,6 +211,10 @@ class DesktopSmokeTest {
                 assertTrue(side.getMinWidth() > 320, "min width from content: " + side.getMinWidth());
                 assertTrue(side.getWidth() >= side.getMinWidth() - 1, side.getWidth() + " < " + side.getMinWidth());
                 assertTrue(content.getWidth() >= content.minWidth(-1) - 1, "content fits without sideways scrolling");
+                // the synthetic clips carry no positions or speeds: no Telemetry tab
+                var tabs = (TabPane) stageRef[0].getScene().lookup(".tab-pane");
+                assertFalse(controller.telemetryAvailableProperty().get());
+                assertEquals(3, tabs.getTabs().size(), "merge, speed up, compress");
                 return null;
             });
             onFx(() -> {

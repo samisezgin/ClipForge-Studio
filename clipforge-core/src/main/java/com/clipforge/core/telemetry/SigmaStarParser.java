@@ -60,6 +60,25 @@ public final class SigmaStarParser implements TelemetryParser {
         return samples.isEmpty() ? Optional.empty() : Optional.of(new Telemetry(id(), samples));
     }
 
+    /**
+     * Dash cams without a GPS module write only their clock: that is not shown as telemetry. A few packets at the
+     * start, middle and end decide whether there is a GPS fix.
+     */
+    @Override
+    public boolean hasData(Path file, StreamTable streams, FfmpegTools tools, Duration duration) throws IOException {
+        for (StreamTable.Stream s : streams.streams()) {
+            if (!s.codecTag().equals("ssmd") && !s.handler().equals("SStarMeta")) {
+                continue;
+            }
+            for (StreamTable.Packet p : StreamTable.samplePackets(file, s.index(), tools, duration)) {
+                if (decode(p.data(), Duration.ZERO).filter(TelemetrySample::hasPosition).isPresent()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     Optional<TelemetrySample> decode(byte[] d, Duration offset) {
         if (d.length < 28) {
             return Optional.empty();

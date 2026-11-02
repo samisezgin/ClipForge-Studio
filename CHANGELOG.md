@@ -13,6 +13,8 @@ each development phase is a minor release.
   warning. Cancel starts nothing. Sources another job still needs, or that changed, are kept; the job list shows what
   was deleted.
 - Quality ranges are clickable presets (the lowest value of the range is selected).
+- The Telemetry tab only shows when a listed video carries positions or speeds (GPS, phone location, GoPro, DJI);
+  a camera clock alone does not count. The check reads only a few samples of each file, in the background.
 
 ### Fixed
 - Long texts wrap to the panel width instead of being cut off; cut-off single-line texts show a tooltip.

@@ -129,9 +129,23 @@ public final class MainView {
         sideScroll.setPrefWidth(400);
         // never scroll sideways: the divider cannot make the panel narrower than its content needs
         sideScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        // the Telemetry tab only shows when a clip carries positions or speeds
+        Runnable telemetryVisibility = () -> {
+            boolean show = controller.telemetryAvailableProperty().get();
+            if (show && !tabs.getTabs().contains(telemetryTab)) {
+                tabs.getTabs().add(telemetryTab);
+            } else if (!show) {
+                tabs.getTabs().remove(telemetryTab);
+            }
+        };
+        listeners.on(controller.telemetryAvailableProperty(), (o, a, b) -> telemetryVisibility.run());
         sideScroll.sceneProperty().addListener((o, a, scene) -> {
             if (scene != null) {
-                Platform.runLater(() -> sideScroll.setMinWidth(sideMinWidth(side, tabs)));
+                Platform.runLater(() -> {
+                    // measured with all tabs, so the panel is wide enough when the Telemetry tab appears later
+                    sideScroll.setMinWidth(sideMinWidth(side, tabs));
+                    telemetryVisibility.run();
+                });
             }
         });
         sideScroll.getStyleClass().addAll("edge-to-edge", "side-panel");

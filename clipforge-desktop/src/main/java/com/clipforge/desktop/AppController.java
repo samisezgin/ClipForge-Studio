@@ -75,6 +75,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -114,6 +115,9 @@ public final class AppController {
     private final ObservableMap<String, Progress> progress = FXCollections.observableHashMap();
     private final Set<Path> selected = new HashSet<>();
     private final BooleanProperty scanning = new SimpleBooleanProperty();
+    private final BooleanProperty telemetryAvailable = new SimpleBooleanProperty();
+    private final Map<String, Boolean> telemetryCache = new ConcurrentHashMap<>();
+    private volatile int telemetryGeneration;
     private final BooleanProperty queueRunning = new SimpleBooleanProperty();
     private final BooleanProperty queuePaused = new SimpleBooleanProperty();
     private final StringProperty status = new SimpleStringProperty("");
@@ -454,6 +458,7 @@ public final class AppController {
             scanGeneration++; // a scan still running for removed folders must not repopulate the list
             rescanRequested = false;
             sessions.clear();
+            checkTelemetry(List.of()); // no clips: no Telemetry tab
             return;
         }
         if (scanning.get()) {
@@ -598,7 +603,54 @@ public final class AppController {
         bumpSelection();
         scheduleSave();
         refreshWatch(); // re-registers folders that were unavailable (e.g. an SD card plugged in again)
+        checkTelemetry(clips);
         rescanIfRequested();
+    }
+
+    // ------------------------------------------------------------------ telemetry availability
+
+    /** {@code true} when at least one listed clip carries positions or speeds: only then the Telemetry tab shows. */
+    public BooleanProperty telemetryAvailableProperty() {
+        return telemetryAvailable;
+    }
+
+    /**
+     * Looks for telemetry in the background, clip by clip, until one has some. Each check reads only the stream table
+     * and a few samples; results are cached per file version, so a rescan does not read the files again.
+     */
+    private void checkTelemetry(List<Clip> clips) {
+        FfmpegTools t = tools.get();
+        int generation = ++telemetryGeneration;
+        if (t == null || clips.isEmpty()) {
+            telemetryAvailable.set(false);
+            return;
+        }
+        List<Clip> todo = clips.stream().filter(c -> c.media() != null).toList();
+        Thread.ofVirtual().start(() -> {
+            TelemetryService service = new TelemetryService(t, ZoneId.systemDefault());
+            boolean found = false;
+            for (Clip c : todo) {
+                if (generation != telemetryGeneration) {
+                    return; // a newer scan took over
+                }
+                String key = c.path() + "|" + c.size() + "|" + c.modified().toEpochMilli();
+                Boolean has = telemetryCache.get(key);
+                if (has == null) {
+                    has = service.hasData(c.path(), c.duration());
+                    telemetryCache.put(key, has);
+                }
+                if (has) {
+                    found = true;
+                    break;
+                }
+            }
+            boolean result = found;
+            Platform.runLater(() -> {
+                if (generation == telemetryGeneration) {
+                    telemetryAvailable.set(result);
+                }
+            });
+        });
     }
 
     // ------------------------------------------------------------------ selection
