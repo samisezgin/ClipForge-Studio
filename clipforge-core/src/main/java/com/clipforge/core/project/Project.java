@@ -1,5 +1,6 @@
 package com.clipforge.core.project;
 
+import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.merge.MergeMode;
 import com.clipforge.core.merge.MergeOptions;
 
@@ -20,6 +21,9 @@ public final class Project {
     private MergeMode mergeMode = MergeMode.PER_SESSION;
     private MergeOptions mergeOptions = MergeOptions.DEFAULT;
     private String outputDir;
+    private CompressOptions compressOptions;
+    private boolean compressFromFile;
+    private String compressFile;
     private List<JobRecord> jobs = new ArrayList<>();
 
     public int getFormatVersion() {
@@ -77,6 +81,31 @@ public final class Project {
 
     public void setOutputDir(String outputDir) {
         this.outputDir = outputDir;
+    }
+
+    /** Last used compression settings; {@code null} until the user picked an encoder. */
+    public CompressOptions getCompressOptions() {
+        return compressOptions;
+    }
+
+    public void setCompressOptions(CompressOptions compressOptions) {
+        this.compressOptions = compressOptions;
+    }
+
+    public boolean isCompressFromFile() {
+        return compressFromFile;
+    }
+
+    public void setCompressFromFile(boolean compressFromFile) {
+        this.compressFromFile = compressFromFile;
+    }
+
+    public String getCompressFile() {
+        return compressFile;
+    }
+
+    public void setCompressFile(String compressFile) {
+        this.compressFile = compressFile;
     }
 
     public List<JobRecord> getJobs() {

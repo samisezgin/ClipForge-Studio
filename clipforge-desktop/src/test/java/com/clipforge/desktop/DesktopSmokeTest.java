@@ -111,6 +111,32 @@ class DesktopSmokeTest {
         Thread.sleep(300);
         snapshot(stage, OUT.resolve("ui-en.png"));
 
+        // compression through the controller, the same path the Compress button uses
+        waitUntil(() -> onFxQuiet(() -> controller.encodersProperty().get() != null));
+        boolean canCompress = onFx(() -> controller.compressOptions() != null);
+        if (canCompress) {
+            onFx(() -> {
+                controller.setCompressSource(false, null);
+                AppController.CompressPlan plan = controller.planCompress();
+                assertTrue(plan.ok(), String.valueOf(plan.errorKey()));
+                assertEquals(2, plan.specs().size(), "one job per session");
+                controller.startCompress(plan.specs());
+                return null;
+            });
+            waitUntil(() -> onFxQuiet(() -> controller.jobs().size() == 4
+                    && controller.jobs().stream().allMatch(j -> j.getState() == JobState.DONE)));
+            try (var files = Files.list(outDir)) {
+                assertEquals(4, files.filter(f -> f.toString().endsWith(".mp4")).count(), "no part/work files left");
+            }
+            onFx(() -> {
+                var tabs = (javafx.scene.control.TabPane) stage.getScene().lookup(".tab-pane");
+                tabs.getSelectionModel().select(1);
+                return null;
+            });
+            Thread.sleep(300);
+            snapshot(stage, OUT.resolve("ui-compress-en.png"));
+        }
+
         Messages.use("tr", List.of());
         Stage trStage = onFx(() -> {
             controller.retranslate();

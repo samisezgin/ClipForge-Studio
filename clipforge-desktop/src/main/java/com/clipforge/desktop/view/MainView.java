@@ -58,6 +58,8 @@ public final class MainView {
     private final BorderPane root = new BorderPane();
     private final FlowPane folderChips = new FlowPane(6, 6);
     private final ListenerBag listeners = new ListenerBag();
+    private OutputFolderBox outputBox;
+    private CompressPanel compressPanel;
 
     public MainView(AppController controller, Stage stage, HostServices host,
                     Consumer<String> onLanguageChange, Consumer<Boolean> onThemeChange) {
@@ -84,10 +86,31 @@ public final class MainView {
         root.setTop(top);
 
         ClipTreeView tree = new ClipTreeView(controller, listeners);
+        outputBox = new OutputFolderBox(controller, listeners);
         MergePanel merge = new MergePanel(controller, listeners, this::merge);
-        SplitPane split = new SplitPane(tree, merge);
-        split.setDividerPositions(0.72);
-        SplitPane.setResizableWithParent(merge, false);
+        compressPanel = new CompressPanel(controller, listeners, start -> {
+            if (start) {
+                compress();
+            } else {
+                sample();
+            }
+        });
+        javafx.scene.control.Tab mergeTab = new javafx.scene.control.Tab(Messages.get("merge.title"), merge);
+        javafx.scene.control.ScrollPane compressScroll = new javafx.scene.control.ScrollPane(compressPanel);
+        compressScroll.setFitToWidth(true);
+        compressScroll.getStyleClass().add("edge-to-edge");
+        javafx.scene.control.Tab compressTab = new javafx.scene.control.Tab(Messages.get("compress.title"), compressScroll);
+        javafx.scene.control.TabPane tabs = new javafx.scene.control.TabPane(mergeTab, compressTab);
+        tabs.setTabClosingPolicy(javafx.scene.control.TabPane.TabClosingPolicy.UNAVAILABLE);
+        VBox side = new VBox(10, outputBox, tabs);
+        VBox.setVgrow(tabs, Priority.ALWAYS);
+        side.setPadding(new Insets(12));
+        side.setMinWidth(300);
+        side.setPrefWidth(340);
+        side.getStyleClass().add("side-panel");
+        SplitPane split = new SplitPane(tree, side);
+        split.setDividerPositions(0.7);
+        SplitPane.setResizableWithParent(side, false);
 
         JobsView jobs = new JobsView(controller, host, listeners);
         SplitPane vertical = new SplitPane(split, jobs);
@@ -250,7 +273,41 @@ public final class MainView {
         }
     }
 
+    private void compress() {
+        if (!outputBox.commit()) {
+            return;
+        }
+        controller.setStatus("status.planning");
+        controller.planCompressAsync(plan -> {
+            if (!plan.ok()) {
+                controller.setStatus("status.ready");
+                error(Messages.get("compress.error.title"), Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
+                return;
+            }
+            controller.startCompressAsync(plan.specs(), msg -> error(Messages.get("compress.error.title"), msg));
+        });
+    }
+
+    private void sample() {
+        if (!outputBox.commit()) {
+            compressPanel.showSampleError("");
+            return;
+        }
+        controller.planCompressAsync(plan -> {
+            if (!plan.ok()) {
+                compressPanel.showSampleError(Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
+                return;
+            }
+            var spec = plan.specs().getFirst();
+            controller.sample(spec, r -> compressPanel.showSample(r, spec.totalBytes()),
+                    msg -> compressPanel.showSampleError(Messages.get("compress.sample.failed")));
+        });
+    }
+
     private void merge() {
+        if (!outputBox.commit()) {
+            return;
+        }
         AppController.MergePlan plan = controller.planMerge();
         if (!plan.ok()) {
             error(Messages.get("merge.error.title"), Messages.get(plan.errorKey(), plan.errorArgs().toArray()));
@@ -407,7 +464,8 @@ public final class MainView {
         for (RecoveryService.Issue i : actionable) {
             sb.append("• ").append(Path.of(i.job().output()).getFileName());
             if (i.kind() == RecoveryService.Kind.SOURCE_CHANGED) {
-                sb.append("  — ").append(Messages.get("recovery.sourceChanged", i.changedSources().size()));
+                sb.append("  — ").append(Messages.get(i.job().getCompress() != null
+                        ? "recovery.sourceChangedRestart" : "recovery.sourceChanged", i.changedSources().size()));
             }
             sb.append('\n');
         }

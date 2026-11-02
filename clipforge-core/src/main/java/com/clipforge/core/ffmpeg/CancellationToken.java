@@ -14,10 +14,17 @@ public final class CancellationToken {
     private static final long GRACE_MILLIS = 2000;
 
     private volatile boolean cancelled;
+    /** Set when a running process was actually told to stop (FFmpeg then exits with 0 but its output is cut). */
+    private volatile boolean interrupted;
     private volatile Process process;
 
     public boolean isCancelled() {
         return cancelled;
+    }
+
+    /** {@code true} if a live process was stopped through this token, whatever its exit code. */
+    public boolean interruptedProcess() {
+        return interrupted;
     }
 
     public void cancel() {
@@ -39,7 +46,10 @@ public final class CancellationToken {
         process = null;
     }
 
-    private static void stop(Process p) {
+    private void stop(Process p) {
+        if (p.isAlive()) {
+            interrupted = true;
+        }
         Thread.ofVirtual().start(() -> {
             try {
                 OutputStream in = p.getOutputStream();

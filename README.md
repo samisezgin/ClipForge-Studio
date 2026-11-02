@@ -4,7 +4,7 @@ Desktop tool for working with segmented video recordings (dash cams, phones, act
 
 - **Merge** clip segments losslessly (stream copy) — per continuous session or all selected clips into one file.
 - **Re-score audio** — keep, remove, or replace with looping background music (crossfade + optional fade-out). *(planned, phase 3)*
-- **Compress** large recordings with AV1/HEVC (NVENC, SVT-AV1, x265) using resumable, segmented encoding. *(planned, phase 2)*
+- **Compress** large recordings with AV1/HEVC (NVENC, SVT-AV1, x265) in resumable segments; the output grows while encoding and can be watched, pause/stop/crash lose at most the segments in progress.
 - **Telemetry** (GPS/speed) visualisation where the camera embeds it. *(planned, phase 4)*
 
 All heavy lifting is done by [FFmpeg](https://ffmpeg.org); ClipForge is the workflow and UI around it.

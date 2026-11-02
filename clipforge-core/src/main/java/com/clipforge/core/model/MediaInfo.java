@@ -14,6 +14,8 @@ import java.time.Instant;
  * @param audioCodec   codec name of the first audio stream, {@code null} if none
  * @param dataStreams  number of data / unknown streams (GPS, telemetry, timecode)
  * @param creationTime {@code creation_time} container tag, {@code null} if absent
+ * @param videoStart   {@code start_time} of the first video stream (often non-zero, e.g. after an edit list)
+ * @param audioStart   {@code start_time} of the first audio stream
  */
 public record MediaInfo(
         Duration duration,
@@ -23,7 +25,21 @@ public record MediaInfo(
         double frameRate,
         String audioCodec,
         int dataStreams,
-        Instant creationTime) {
+        Instant creationTime,
+        Duration videoStart,
+        Duration audioStart) {
+
+    public MediaInfo {
+        videoStart = videoStart == null ? Duration.ZERO : videoStart;
+        audioStart = audioStart == null ? Duration.ZERO : audioStart;
+    }
+
+    /** Media info without stream start offsets (both zero). */
+    public MediaInfo(Duration duration, String videoCodec, int width, int height, double frameRate,
+                     String audioCodec, int dataStreams, Instant creationTime) {
+        this(duration, videoCodec, width, height, frameRate, audioCodec, dataStreams, creationTime,
+                Duration.ZERO, Duration.ZERO);
+    }
 
     public boolean hasVideo() {
         return videoCodec != null;

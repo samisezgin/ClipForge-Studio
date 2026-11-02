@@ -4,7 +4,10 @@ import atlantafx.base.theme.Styles;
 import com.clipforge.core.ffmpeg.Progress;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.project.JobRecord;
+import com.clipforge.core.compress.CompressState;
 import com.clipforge.core.project.JobState;
+import com.clipforge.core.project.JobType;
+import com.clipforge.core.util.OutputNaming;
 import com.clipforge.core.util.Formats;
 import com.clipforge.desktop.AppController;
 import javafx.application.HostServices;
@@ -90,6 +93,8 @@ public final class JobsView extends VBox {
         private final ProgressBar bar = new ProgressBar(0);
         private final Button cancel = new Button(Messages.get("common.cancel"));
         private final Button open = new Button(Messages.get("jobs.openFolder"));
+        private final Button watch = new Button(Messages.get("jobs.openOutput"));
+        private final Label kind = new Label();
         private final VBox box;
 
         JobCell() {
@@ -98,9 +103,12 @@ public final class JobsView extends VBox {
             bar.setMaxWidth(Double.MAX_VALUE);
             cancel.getStyleClass().addAll(Styles.SMALL, Styles.FLAT);
             open.getStyleClass().addAll(Styles.SMALL, Styles.FLAT);
+            watch.getStyleClass().addAll(Styles.SMALL, Styles.FLAT);
+            watch.setTooltip(new Tooltip(Messages.get("jobs.openOutput.tip")));
+            kind.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.TEXT_MUTED);
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
-            HBox top = new HBox(8, name, state, spacer, open, cancel);
+            HBox top = new HBox(8, kind, name, state, spacer, watch, open, cancel);
             top.setAlignment(Pos.CENTER_LEFT);
             box = new VBox(4, top, bar, detail);
         }
@@ -115,6 +123,10 @@ public final class JobsView extends VBox {
             Path out = Path.of(job.output());
             name.setText(out.getFileName().toString());
             setTooltip(null);
+            boolean compress = job.getType() == JobType.COMPRESS;
+            kind.setText(Messages.get(compress ? "jobs.kind.compress" : "jobs.kind.merge"));
+            // the growing output can be watched while compressing (video only until the final mux)
+            Path growing = OutputNaming.partOf(out);
             JobState s = job.getState();
             state.setText(Messages.get("jobs.state." + s.name().toLowerCase()));
             state.getStyleClass().removeAll(Styles.SUCCESS, Styles.DANGER, Styles.WARNING, Styles.ACCENT);
@@ -126,7 +138,7 @@ public final class JobsView extends VBox {
             });
 
             Progress p = controller.progress().get(job.getId());
-            Duration total = Duration.ofMillis(job.getMerge().totalDurationMs());
+            Duration total = Duration.ofMillis(job.totalDurationMs());
             switch (s) {
                 case DONE -> {
                     bar.setProgress(1);
@@ -135,10 +147,21 @@ public final class JobsView extends VBox {
                 }
                 case RUNNING -> {
                     bar.setProgress(p == null || p.fraction() < 0 ? ProgressBar.INDETERMINATE_PROGRESS : p.fraction());
-                    detail.setText(p == null ? Messages.get("jobs.detail.starting")
-                            : Messages.get("jobs.detail.running", Formats.duration(p.processed()),
-                            Formats.duration(total), p.speed(),
-                            Formats.duration(p.eta()), Formats.size(p.outputBytes())));
+                    if (compress && p != null && p.frames() < 0) {
+                        bar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
+                        detail.setText(Messages.get("jobs.detail.finishing"));
+                    } else if (compress) {
+                        CompressState st = job.getCompress();
+                        detail.setText(p == null ? Messages.get("jobs.detail.starting")
+                                : Messages.get("jobs.detail.compressing", Formats.duration(p.processed()),
+                                Formats.duration(total), Formats.duration(Duration.ofMillis(st.appendedMs())),
+                                p.speed(), Formats.duration(p.eta()), Formats.size(st.getCommittedBytes())));
+                    } else {
+                        detail.setText(p == null ? Messages.get("jobs.detail.starting")
+                                : Messages.get("jobs.detail.running", Formats.duration(p.processed()),
+                                Formats.duration(total), p.speed(),
+                                Formats.duration(p.eta()), Formats.size(p.outputBytes())));
+                    }
                 }
                 case FAILED -> {
                     bar.setProgress(0);
@@ -149,8 +172,14 @@ public final class JobsView extends VBox {
                 }
                 default -> {
                     bar.setProgress(0);
-                    detail.setText(Messages.get("jobs.detail.inputs", job.getMerge().inputs().size(),
-                            Formats.duration(total), Formats.size(job.getMerge().totalBytes())));
+                    if (compress && job.getCompress().appendedMs() > 0) {
+                        detail.setText(Messages.get("jobs.detail.compressPaused",
+                                Formats.duration(Duration.ofMillis(job.getCompress().appendedMs())),
+                                Formats.duration(total), Formats.size(job.getCompress().getCommittedBytes())));
+                    } else {
+                        detail.setText(Messages.get("jobs.detail.inputs", job.inputCount(),
+                                Formats.duration(total), Formats.size(job.totalBytes())));
+                    }
                 }
             }
             bar.setVisible(s == JobState.RUNNING);
@@ -160,6 +189,17 @@ public final class JobsView extends VBox {
             cancel.setOnAction(e -> controller.cancelJob(job));
             open.setVisible(s == JobState.DONE);
             open.setManaged(s == JobState.DONE);
+            boolean canWatch = compress && (s == JobState.RUNNING || s == JobState.PAUSED) && Files.exists(growing);
+            Path toWatch = s == JobState.DONE ? out : growing;
+            watch.setVisible(canWatch || s == JobState.DONE);
+            watch.setManaged(canWatch || s == JobState.DONE);
+            watch.setOnAction(e -> {
+                if (!Files.exists(toWatch)) {
+                    controller.setStatus("status.fileMissing", toWatch.getFileName());
+                } else if (host != null) {
+                    host.showDocument(toWatch.toAbsolutePath().toUri().toString());
+                }
+            });
             open.setOnAction(e -> {
                 if (host != null) {
                     host.showDocument(out.toAbsolutePath().getParent().toUri().toString());

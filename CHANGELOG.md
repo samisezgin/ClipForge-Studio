@@ -5,6 +5,19 @@ each development phase is a minor release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-02
+### Added
+- Compression tab: compress the selected clips (joined in the same pass, grouped like the merge mode) or any video file.
+- Encoder profiles AV1 NVENC (default), HEVC NVENC, SVT-AV1 and x265 with constant-quality slider; profiles are
+  test-encoded at startup and only working ones are shown. Defaults tuned with VMAF on real dash cam footage.
+- Segmented encoding, frame-exact for joined clips and sources with a non-zero start time. Automatic segment length:
+  a per-encoder default first, then about one minute of work per segment from the measured speed. Parallel segments
+  (2 on NVIDIA GPUs).
+- Growing output: finished segments are appended to `<name>.part.mp4`, which can be opened with *Watch* while encoding.
+- Pause (lossless), Stop now and crash recovery at segment level, including truncated appends and half-written segments.
+- *Encode 60 s sample*: real bitrate, size and time estimate for the chosen settings.
+- Keep or remove audio for compressed outputs.
+
 ## [0.1.0] - 2026-11-02
 ### Added
 - Clip scanning across multiple folders with parallel ffprobe; files still being copied are flagged and not selectable.
