@@ -1,5 +1,7 @@
 package com.clipforge.core.project;
 
+import com.clipforge.core.compress.CompressSpec;
+import com.clipforge.core.compress.CompressState;
 import com.clipforge.core.merge.MergeSpec;
 
 import java.time.Instant;
@@ -17,6 +19,7 @@ public final class JobRecord {
     private JobType type;
     private JobState state;
     private MergeSpec merge;
+    private CompressState compress;
     private List<Fingerprint> sources = new ArrayList<>();
     private Instant created;
     private Instant updated;
@@ -38,6 +41,26 @@ public final class JobRecord {
         r.created = now;
         r.updated = now;
         return r;
+    }
+
+    public static JobRecord compress(CompressSpec spec, List<Fingerprint> sources, Instant now) {
+        JobRecord r = new JobRecord();
+        r.id = UUID.randomUUID().toString();
+        r.type = JobType.COMPRESS;
+        r.state = JobState.PENDING;
+        r.compress = new CompressState(spec);
+        r.sources = new ArrayList<>(sources);
+        r.created = now;
+        r.updated = now;
+        return r;
+    }
+
+    public CompressState getCompress() {
+        return compress;
+    }
+
+    public void setCompress(CompressState compress) {
+        this.compress = compress;
     }
 
     public String getId() {
@@ -137,6 +160,32 @@ public final class JobRecord {
 
     /** Output file of the job. */
     public String output() {
-        return merge != null ? merge.output() : null;
+        if (merge != null) {
+            return merge.output();
+        }
+        return compress != null && compress.getSpec() != null ? compress.getSpec().output() : null;
+    }
+
+    /** Total media duration the job processes, in milliseconds. */
+    public long totalDurationMs() {
+        if (merge != null) {
+            return merge.totalDurationMs();
+        }
+        return compress != null && compress.getSpec() != null ? compress.getSpec().totalDurationMs() : 0;
+    }
+
+    /** Total size of the job's inputs. */
+    public long totalBytes() {
+        if (merge != null) {
+            return merge.totalBytes();
+        }
+        return compress != null && compress.getSpec() != null ? compress.getSpec().totalBytes() : 0;
+    }
+
+    public int inputCount() {
+        if (merge != null) {
+            return merge.inputs().size();
+        }
+        return compress != null && compress.getSpec() != null ? compress.getSpec().inputs().size() : 0;
     }
 }

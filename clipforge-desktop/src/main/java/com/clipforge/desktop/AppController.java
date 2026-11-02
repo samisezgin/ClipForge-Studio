@@ -1,5 +1,12 @@
 package com.clipforge.desktop;
 
+import com.clipforge.core.compress.AudioMode;
+import com.clipforge.core.compress.CompressOptions;
+import com.clipforge.core.compress.CompressPlanner;
+import com.clipforge.core.compress.CompressSampler;
+import com.clipforge.core.compress.CompressSpec;
+import com.clipforge.core.compress.EncoderCapabilities;
+import com.clipforge.core.compress.EncoderProfile;
 import com.clipforge.core.ffmpeg.FfmpegLocator;
 import com.clipforge.core.ffmpeg.FfmpegTools;
 import com.clipforge.core.ffmpeg.ProbeService;
@@ -85,6 +92,8 @@ public final class AppController {
     private final BooleanProperty queuePaused = new SimpleBooleanProperty();
     private final StringProperty status = new SimpleStringProperty("");
     private final ObjectProperty<FfmpegTools> tools = new SimpleObjectProperty<>();
+    /** Encoder profiles that work on this machine; {@code null} while detection runs. */
+    private final ObjectProperty<java.util.Set<EncoderProfile>> encoders = new SimpleObjectProperty<>();
     /** Incremented whenever the selection changes, so views can refresh summaries. */
     private final ObjectProperty<Integer> selectionVersion = new SimpleObjectProperty<>(0);
     private final ObjectProperty<Integer> projectVersion = new SimpleObjectProperty<>(0);
@@ -106,7 +115,21 @@ public final class AppController {
         String dir = settings.ffmpegDir();
         Optional<FfmpegTools> found = FfmpegLocator.locate(dir.isBlank() ? null : Path.of(dir));
         tools.set(found.orElse(null));
+        detectEncoders();
         return found.isPresent();
+    }
+
+    /** Test-encodes with each profile in the background (NVENC needs a working NVIDIA driver). */
+    private void detectEncoders() {
+        FfmpegTools t = tools.get();
+        if (t == null) {
+            encoders.set(java.util.Set.of());
+            return;
+        }
+        Thread.ofVirtual().start(() -> {
+            java.util.Set<EncoderProfile> found = EncoderCapabilities.detect(t);
+            Platform.runLater(() -> encoders.set(java.util.Set.copyOf(found)));
+        });
     }
 
     public boolean useFfmpegDir(Path dir) {
@@ -114,6 +137,7 @@ public final class AppController {
         if (found.isPresent()) {
             settings.setFfmpegDir(dir.toString());
             tools.set(found.get());
+            detectEncoders();
             rebuildQueue();
             // jobs the user already chose to resume (e.g. in the recovery dialog) start now that FFmpeg exists
             if (queue != null && !queue.isPaused() && project.getJobs().stream()
@@ -278,7 +302,10 @@ public final class AppController {
             queue = null;
             return;
         }
-        queue = new JobQueue(project, new MergeService(t), this::saveFromWorker, new JobQueue.Listener() {
+        java.util.Map<com.clipforge.core.project.JobType, com.clipforge.core.job.JobExecutor> executors = java.util.Map.of(
+                com.clipforge.core.project.JobType.MERGE, new com.clipforge.core.job.MergeExecutor(new MergeService(t)),
+                com.clipforge.core.project.JobType.COMPRESS, new com.clipforge.core.compress.SegmentedEncoder(t));
+        queue = new JobQueue(project, executors, this::saveFromWorker, new JobQueue.Listener() {
             @Override
             public void jobChanged(JobRecord job) {
                 Platform.runLater(() -> refreshJob(job));
@@ -522,6 +549,153 @@ public final class AppController {
             project.setOutputDir(dir == null ? null : dir.toAbsolutePath().toString());
         }
         scheduleSave();
+    }
+
+    // ------------------------------------------------------------------ compression settings
+
+    public ObjectProperty<java.util.Set<EncoderProfile>> encodersProperty() {
+        return encoders;
+    }
+
+    /** Saved options, or defaults for the best available encoder; {@code null} if no encoder works. */
+    public CompressOptions compressOptions() {
+        CompressOptions o = project.getCompressOptions();
+        java.util.Set<EncoderProfile> av = encoders.get();
+        if (o != null && (av == null || av.contains(o.profile()))) {
+            return o;
+        }
+        EncoderProfile p = av == null ? null : EncoderCapabilities.preferred(av);
+        return p == null ? null : CompressOptions.defaults(p);
+    }
+
+    public void setCompressOptions(CompressOptions o) {
+        synchronized (project) {
+            project.setCompressOptions(o);
+        }
+        scheduleSave();
+    }
+
+    public boolean compressFromFile() {
+        return project.isCompressFromFile();
+    }
+
+    public String compressFile() {
+        return project.getCompressFile();
+    }
+
+    public void setCompressSource(boolean fromFile, Path file) {
+        synchronized (project) {
+            project.setCompressFromFile(fromFile);
+            project.setCompressFile(file == null ? null : file.toAbsolutePath().toString());
+        }
+        scheduleSave();
+    }
+
+    /** Result of {@link #planCompress()}. */
+    public record CompressPlan(List<CompressSpec> specs, String errorKey, List<String> errorArgs) {
+        static CompressPlan error(String key, String... args) {
+            return new CompressPlan(List.of(), key, List.of(args));
+        }
+
+        public boolean ok() {
+            return errorKey == null;
+        }
+    }
+
+    /**
+     * Builds compression jobs: for the selected clips one job per output of the current merge mode (the clips are
+     * joined and compressed in one pass), or one job for the chosen file.
+     */
+    public CompressPlan planCompress() {
+        FfmpegTools t = tools.get();
+        CompressOptions o = compressOptions();
+        if (t == null) {
+            return CompressPlan.error("error.noFfmpeg");
+        }
+        if (o == null) {
+            return CompressPlan.error("error.noEncoder");
+        }
+        String out = project.getOutputDir();
+        if (out == null || out.isBlank()) {
+            return CompressPlan.error("error.noOutputDir");
+        }
+        Path outDir = Path.of(out);
+        try {
+            Files.createDirectories(outDir);
+            List<Path> reserved = reservedOutputs();
+            List<CompressSpec> specs = new ArrayList<>();
+            if (project.isCompressFromFile()) {
+                String f = project.getCompressFile();
+                if (f == null || !Files.isRegularFile(Path.of(f))) {
+                    return CompressPlan.error("error.noCompressFile");
+                }
+                Path file = Path.of(f);
+                var media = new ProbeService(t).probe(file);
+                if (media.isEmpty() || !media.get().hasVideo()) {
+                    return CompressPlan.error("error.notVideo", file.getFileName().toString());
+                }
+                specs.add(CompressPlanner.forFile(file, Files.size(file), media.get(), outDir, o, reserved));
+            } else {
+                if (selectedClips().isEmpty()) {
+                    return CompressPlan.error("error.noSelection");
+                }
+                java.util.Map<Path, Clip> byPath = new java.util.HashMap<>();
+                sessions.forEach(s -> s.clips().forEach(c -> byPath.put(c.path(), c)));
+                for (MergeSpec m : MergePlanner.plan(sessions, selected, project.getMergeMode(), outDir,
+                        project.getMergeOptions(), reserved)) {
+                    List<Clip> clips = m.inputs().stream().map(i -> byPath.get(Path.of(i))).toList();
+                    List<Path> taken = new ArrayList<>(reserved);
+                    specs.forEach(s -> taken.add(Path.of(s.output())));
+                    specs.add(CompressPlanner.forClips(clips, outDir, o, taken));
+                }
+            }
+            return new CompressPlan(specs, null, List.of());
+        } catch (IncompatibleClipsException e) {
+            return CompressPlan.error("error.incompatible", String.join(", ", e.formats()));
+        } catch (IOException e) {
+            return CompressPlan.error("error.io", String.valueOf(e.getMessage()));
+        }
+    }
+
+    public void startCompress(List<CompressSpec> specs) throws IOException {
+        if (queue == null) {
+            throw new IOException(Messages.get("error.noFfmpeg"));
+        }
+        List<JobRecord> created = new ArrayList<>();
+        for (CompressSpec s : specs) {
+            List<Fingerprint> fps = new ArrayList<>();
+            for (String in : s.inputs()) {
+                fps.add(Fingerprint.of(Path.of(in)));
+            }
+            created.add(JobRecord.compress(s, fps, clock.instant()));
+        }
+        saveNow();
+        queue.submit(created);
+        queue.unpause();
+        queueRunning.set(true);
+        queuePaused.set(project.getJobs().stream()
+                .anyMatch(j -> j.getState() == com.clipforge.core.project.JobState.PAUSED));
+    }
+
+    /** Encodes a short sample of the first planned job in the background. */
+    public void sample(CompressSpec spec, java.util.function.Consumer<CompressSampler.Result> done,
+                       java.util.function.Consumer<String> failed) {
+        FfmpegTools t = tools.get();
+        Thread.ofVirtual().start(() -> {
+            try {
+                CompressSampler.Result r = new CompressSampler(t).sample(spec, 60, null);
+                Platform.runLater(() -> done.accept(r));
+            } catch (IOException e) {
+                Platform.runLater(() -> failed.accept(String.valueOf(e.getMessage())));
+            }
+        });
+    }
+
+    private List<Path> reservedOutputs() {
+        synchronized (project) {
+            return project.getJobs().stream().filter(j -> j.getState().unfinished() && j.output() != null)
+                    .map(j -> Path.of(j.output())).toList();
+        }
     }
 
     // ------------------------------------------------------------------ jobs

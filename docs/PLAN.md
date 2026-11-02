@@ -34,8 +34,17 @@ performance impact.
   recovery prompt on startup. Merge jobs resume per output file.
 
 ## Phase 2 — Compression (v0.2.0)
-- Profiles: AV1 NVENC (default, `-preset p6 -tune hq -rc vbr -cq 28 -b:v 0 -multipass qres -spatial-aq 1 -temporal-aq 1`),
-  HEVC NVENC, SVT-AV1 (`-preset 6 -crf 30`), x265 (`-preset medium -crf 24`). NVENC self-test at startup.
+- Profiles: AV1 NVENC (default, `-preset p6 -tune hq -rc vbr -cq 38 -b:v 0 -multipass qres -spatial-aq 1 -temporal-aq 1`),
+  HEVC NVENC (CQ 32, no B-frames), SVT-AV1 (`-preset 6 -crf 35`), x265 (`-preset medium -crf 26`, no B-frames).
+  Every profile is test-encoded at startup; only working ones are offered.
+- Measured on the real night footage (10 Mbps HEVC 2304x1296, VMAF against the source): AV1 NVENC CQ 36 → 6.8 Mbps /
+  VMAF 92, CQ 40 → 4.3 Mbps / 88.7 at 7.5x realtime; SVT-AV1 CRF 35 → 3.8 Mbps / 90.6 at 2x; HEVC NVENC CQ 32 →
+  6.4 Mbps / 90.7 at 3.7x. Note: `av1_nvenc` CQ is on a 0-63 scale, so the initially planned CQ 28 produced files
+  larger than the source. Two real 2-minute clips: 320 MB → 150 MB (-53 %) in 30 s, frame-exact.
+- Segments are encoded with `-ss S -copyts -i … -vf trim=start=S:end=E -fps_mode passthrough` (frame-exact, no
+  overlap) into fragmented MP4 with a 90 kHz timescale; each segment's `tfdt` is shifted on append.
+- Audio is extracted once (stream copy, AAC fallback) and muxed with the video at the end together with
+  `+faststart`; while encoding, the growing `.part.mp4` is video only.
 - Quality slider + "encode 60 s sample" to estimate final size/time.
 - **Segmented encoding with a growing output:** the input timeline is cut into fixed time segments independent of
   source clip length (auto length ≈ 45–60 s of work per segment, or manual 30 s–10 min), keyframe aligned.

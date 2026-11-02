@@ -1,29 +1,29 @@
 package com.clipforge.core.job;
 
 import com.clipforge.core.ffmpeg.CancellationToken;
-import com.clipforge.core.ffmpeg.FfmpegResult;
 import com.clipforge.core.ffmpeg.Progress;
 import com.clipforge.core.merge.MergeService;
-import com.clipforge.core.merge.MergeSpec;
 import com.clipforge.core.project.JobRecord;
 import com.clipforge.core.project.JobState;
+import com.clipforge.core.project.JobType;
 import com.clipforge.core.project.Project;
-import com.clipforge.core.util.DiskCheck;
-import com.clipforge.core.util.Formats;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Runs the project's jobs one after another on a background thread.
+ * Runs the project's jobs one after another on a background thread, delegating the actual work to a
+ * {@link JobExecutor} per {@link JobType}.
  * <p>
  * All mutations of {@link JobRecord}s happen while holding the project's monitor, followed by a save through the
  * {@code persist} callback, so the project file always reflects the latest state. Picking the next job and marking
@@ -41,31 +41,36 @@ public final class JobQueue {
         void idle();
     }
 
-    private enum StopMode { NONE, CANCEL_JOB, STOP_NOW }
-
     private static final Logger LOG = Logger.getLogger(JobQueue.class.getName());
 
     private final Project project;
-    private final MergeService merge;
+    private final Map<JobType, JobExecutor> executors;
     private final Runnable persist;
     private final Listener listener;
     private final Clock clock;
 
-    /** Guards {@link #worker}; never held while waiting for the project monitor. */
+    /** Guards {@link #worker}; never held while waiting for the project monitor except in the exit check. */
     private final Object lock = new Object();
     private Thread worker;
     private volatile boolean pauseRequested;
+    private volatile boolean stopNowRequested;
+    private volatile boolean cancelRequested;
     private volatile JobRecord current;
-    private volatile CancellationToken currentToken;
-    private volatile StopMode stopMode = StopMode.NONE;
+    private final Set<CancellationToken> tokens = ConcurrentHashMap.newKeySet();
     private volatile CountDownLatch idleLatch = new CountDownLatch(0);
 
-    public JobQueue(Project project, MergeService merge, Runnable persist, Listener listener, Clock clock) {
+    public JobQueue(Project project, Map<JobType, JobExecutor> executors, Runnable persist, Listener listener,
+                    Clock clock) {
         this.project = project;
-        this.merge = merge;
+        this.executors = new EnumMap<>(executors);
         this.persist = persist;
         this.listener = listener;
         this.clock = clock;
+    }
+
+    /** Merge-only queue (used by tests and simple callers). */
+    public JobQueue(Project project, MergeService merge, Runnable persist, Listener listener, Clock clock) {
+        this(project, Map.of(JobType.MERGE, new MergeExecutor(merge)), persist, listener, clock);
     }
 
     /** Adds jobs to the project and starts the worker if it is not paused. */
@@ -104,7 +109,7 @@ public final class JobQueue {
         return current;
     }
 
-    /** Lossless pause: the running job finishes, no further jobs are started; pending jobs become PAUSED. */
+    /** Lossless pause: work in progress finishes, nothing new starts; pending jobs become PAUSED. */
     public void pause() {
         pauseRequested = true;
         synchronized (project) {
@@ -120,14 +125,11 @@ public final class JobQueue {
         }
     }
 
-    /** Stops immediately: the running job is interrupted, its partial output removed, and it becomes PAUSED. */
+    /** Stops immediately: running FFmpeg processes are interrupted and the running job becomes PAUSED. */
     public void stopNow() {
         pause();
-        stopMode = StopMode.STOP_NOW;
-        CancellationToken t = currentToken;
-        if (t != null) {
-            t.cancel();
-        }
+        stopNowRequested = true;
+        tokens.forEach(CancellationToken::cancel);
     }
 
     /** Clears the pause and continues with all paused and pending jobs. */
@@ -149,15 +151,12 @@ public final class JobQueue {
         start();
     }
 
-    /** Cancels one job: running → stopped and partial output removed; pending/paused → cancelled. */
+    /** Cancels one job: running → stopped and its partial files removed; pending/paused → cancelled. */
     public void cancel(JobRecord job) {
         synchronized (project) {
             if (job == current) {
-                stopMode = StopMode.CANCEL_JOB;
-                CancellationToken t = currentToken;
-                if (t != null) {
-                    t.cancel();
-                }
+                cancelRequested = true;
+                tokens.forEach(CancellationToken::cancel);
                 return;
             }
             if (job.getState().unfinished()) {
@@ -221,8 +220,8 @@ public final class JobQueue {
             if (next == null) {
                 return null;
             }
-            stopMode = StopMode.NONE;
-            currentToken = new CancellationToken();
+            stopNowRequested = false;
+            cancelRequested = false;
             current = next;
             next.clearError();
             update(next, JobState.RUNNING);
@@ -232,65 +231,101 @@ public final class JobQueue {
     }
 
     private void runJob(JobRecord job) {
-        CancellationToken token = currentToken;
+        JobExecutor.Outcome outcome;
         try {
-            MergeSpec spec = job.getMerge();
-            Path out = Path.of(spec.output());
-            Path dir = out.toAbsolutePath().getParent();
-            DiskCheck.Result disk = DiskCheck.check(dir, spec.totalBytes(), spec.totalBytes());
-            if (!disk.enoughSpace()) {
-                finishFailed(job, "error.diskSpace", null,
-                        Formats.size(disk.requiredBytes()), Formats.size(disk.usableBytes()));
-                return;
+            JobExecutor executor = executors.get(job.getType());
+            if (executor == null) {
+                throw new IllegalStateException("No executor for " + job.getType());
             }
-            if (disk.exceedsFileSizeLimit()) {
-                finishFailed(job, "error.fat32", null, disk.fileSystem());
-                return;
-            }
-            Files.createDirectories(dir);
-            FfmpegResult r = merge.merge(spec, p -> listener.progress(job, p), token);
-            synchronized (project) {
-                if (r.success() && Files.isRegularFile(out)) {
-                    update(job, JobState.DONE);
-                } else if (r.cancelled()) {
-                    update(job, stopMode == StopMode.STOP_NOW ? JobState.PAUSED : JobState.CANCELLED);
-                } else {
-                    job.fail("error.ffmpeg", tail(r.stderrText().lines().toList()), String.valueOf(r.exitCode()));
-                    job.setUpdated(clock.instant());
-                }
-            }
-            persist.run();
-            listener.jobChanged(job);
+            outcome = executor.execute(job, context(job));
         } catch (IOException e) {
             LOG.log(Level.WARNING, "Job failed", e);
-            finishFailed(job, "error.io", null, String.valueOf(e.getMessage()));
+            synchronized (project) {
+                job.fail("error.io", null, String.valueOf(e.getMessage()));
+            }
+            outcome = JobExecutor.Outcome.FAILED;
         } catch (RuntimeException e) {
             // a broken record (e.g. hand-edited project) must not leave the job RUNNING or kill the worker
             LOG.log(Level.SEVERE, "Unexpected job failure", e);
-            finishFailed(job, "error.internal", String.valueOf(e), e.getClass().getSimpleName());
+            synchronized (project) {
+                job.fail("error.internal", String.valueOf(e), e.getClass().getSimpleName());
+            }
+            outcome = JobExecutor.Outcome.FAILED;
         } finally {
             current = null;
-            currentToken = null;
+            tokens.clear();
         }
-    }
-
-    private void finishFailed(JobRecord job, String key, String detail, String... args) {
         synchronized (project) {
-            job.fail(key, detail, args);
-            job.setUpdated(clock.instant());
+            switch (outcome) {
+                case DONE -> update(job, JobState.DONE);
+                case PAUSED -> update(job, JobState.PAUSED);
+                case CANCELLED -> update(job, JobState.CANCELLED);
+                case FAILED -> {
+                    job.setState(JobState.FAILED);
+                    job.setUpdated(clock.instant());
+                    listener.jobChanged(job);
+                }
+            }
         }
         persist.run();
-        listener.jobChanged(job);
+    }
+
+    private JobContext context(JobRecord job) {
+        return new JobContext() {
+            @Override
+            public boolean pauseRequested() {
+                return pauseRequested;
+            }
+
+            @Override
+            public boolean stopNowRequested() {
+                return stopNowRequested;
+            }
+
+            @Override
+            public boolean cancelRequested() {
+                return cancelRequested;
+            }
+
+            @Override
+            public void track(CancellationToken token) {
+                tokens.add(token);
+                if (stopNowRequested || cancelRequested) {
+                    token.cancel();
+                }
+            }
+
+            @Override
+            public void untrack(CancellationToken token) {
+                tokens.remove(token);
+            }
+
+            @Override
+            public void progress(Progress progress) {
+                listener.progress(job, progress);
+            }
+
+            @Override
+            public void save() {
+                persist.run();
+                listener.jobChanged(job);
+            }
+
+            @Override
+            public Object lock() {
+                return project;
+            }
+
+            @Override
+            public Clock clock() {
+                return clock;
+            }
+        };
     }
 
     private void update(JobRecord job, JobState state) {
         job.setState(state);
         job.setUpdated(clock.instant());
         listener.jobChanged(job);
-    }
-
-    private static String tail(List<String> lines) {
-        int from = Math.max(0, lines.size() - 8);
-        return String.join("\n", lines.subList(from, lines.size()));
     }
 }

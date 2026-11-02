@@ -59,6 +59,13 @@ public final class RecoveryService {
         if (!job.getState().unfinished()) {
             return;
         }
+        if (job.getType() == JobType.COMPRESS) {
+            // segment-level recovery happens in CompressRecovery when the job runs; the growing output is kept
+            job.clearError();
+            job.setState(JobState.PENDING);
+            job.setUpdated(now);
+            return;
+        }
         if (job.output() != null) {
             Path out = Path.of(job.output());
             Path part = OutputNaming.partOf(out);
