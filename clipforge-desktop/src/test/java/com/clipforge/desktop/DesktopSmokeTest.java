@@ -224,6 +224,22 @@ class DesktopSmokeTest {
             Thread.sleep(300);
             snapshot(stageRef[0], OUT.resolve("ui-compress-en.png"));
             onFx(() -> {
+                // scrolled to the bottom, the last line of the compress tab must be inside the visible area
+                var side = sideScroll(stageRef[0]);
+                var tabs = (TabPane) stageRef[0].getScene().lookup(".tab-pane");
+                var panel = (Region) tabs.getSelectionModel().getSelectedItem().getContent();
+                var last = panel.getChildrenUnmodifiable().getLast();
+                double lastBottom = last.localToScene(last.getBoundsInLocal()).getMaxY();
+                double viewBottom = side.localToScene(side.getLayoutBounds()).getMaxY();
+                var content = (Region) side.getContent();
+                assertTrue(lastBottom <= viewBottom + 1, "last line cut off: " + lastBottom + " > " + viewBottom
+                        + " panel h=" + panel.getHeight() + " pref(w)=" + panel.prefHeight(panel.getWidth())
+                        + " pref(-1)=" + panel.prefHeight(-1) + " tabs h=" + tabs.getHeight() + " tabs pref="
+                        + tabs.prefHeight(-1) + " content h=" + content.getHeight() + " content pref(w)="
+                        + content.prefHeight(content.getWidth()) + " vvalue=" + side.getVvalue());
+                return null;
+            });
+            onFx(() -> {
                 stageRef[0].close();
                 return null;
             });

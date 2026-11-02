@@ -12,13 +12,12 @@ import javafx.scene.control.RadioButton;
 import javafx.scene.control.Separator;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Tooltip;
-import javafx.scene.layout.VBox;
 
 /**
  * Merge settings: how selected clips are grouped into outputs, and the layout of a lossless merge. Merging is
  * started from the {@link PipelinePanel}, alone or together with speed-up and compression.
  */
-public final class MergePanel extends VBox {
+public final class MergePanel extends TabContent {
 
     public MergePanel(AppController controller, ListenerBag listeners) {
         setSpacing(10);

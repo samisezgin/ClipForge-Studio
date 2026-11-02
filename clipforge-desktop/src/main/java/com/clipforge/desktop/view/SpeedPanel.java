@@ -10,12 +10,11 @@ import javafx.geometry.Insets;
 import javafx.scene.control.Label;
 import javafx.scene.control.SpinnerValueFactory;
 import javafx.scene.control.Tooltip;
-import javafx.scene.layout.VBox;
 
 import java.time.Duration;
 
 /** Speed-up factor (applied when "Speed up" is ticked in the {@link PipelinePanel}). */
-public final class SpeedPanel extends VBox {
+public final class SpeedPanel extends TabContent {
 
     /** The slider covers the common range; larger factors (up to 100x) can be typed. */
     private static final double SLIDER_MAX = 10;

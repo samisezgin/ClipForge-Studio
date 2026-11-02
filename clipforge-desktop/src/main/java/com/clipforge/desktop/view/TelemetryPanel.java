@@ -17,7 +17,6 @@ import javafx.scene.chart.XYChart;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 
@@ -35,7 +34,7 @@ import java.util.Locale;
  * Telemetry of the selected clips: what the camera recorded (GPS, speed or only its clock), an offline route
  * preview, a speed chart, GPX/CSV export and "show on map" (an HTML page with an OpenStreetMap map in the browser).
  */
-public final class TelemetryPanel extends VBox {
+public final class TelemetryPanel extends TabContent {
 
     private final AppController controller;
     private final HostServices host;

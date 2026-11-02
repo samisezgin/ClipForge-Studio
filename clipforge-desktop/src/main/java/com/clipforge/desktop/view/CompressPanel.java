@@ -33,7 +33,7 @@ import java.util.Set;
  * is chosen in the {@link PipelinePanel}; these settings are also used by a speed-up without compression, except the
  * quality (that one then keeps close to the source).
  */
-public final class CompressPanel extends VBox {
+public final class CompressPanel extends TabContent {
 
     /** Segment length choices in seconds; 0 = automatic. */
     private static final List<Integer> SEGMENT_CHOICES = List.of(0, 30, 60, 120, 300, 600);
