@@ -5,6 +5,30 @@ each development phase is a minor release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+### Added
+- Audio panel shared by merging and compression: keep original audio, remove it, or background music.
+- Music playlist (MP3, M4A, FLAC, WAV, …) with add / remove / reorder and total length.
+- Loop switch (default on): short music repeats until the video ends with a seamless crossfade (0-3 s) at every
+  restart; off: the playlist plays once, then silence.
+- Fade-out switch with adjustable length (0.5-30 s, default 3 s), music volume, optional quiet mix of the original sound.
+- Merging with music keeps the video stream-copied; only the soundtrack is encoded.
+
+- Telemetry tab (preview, completed in 0.4.0): reads SigmaStar dash cam metadata, GoPro GPMF, DJI .SRT files and
+  phone location tags; GPX/CSV export, offline route preview, speed chart, OpenStreetMap view in the browser.
+
+### Changed
+- The Compress tab's keep/remove audio choice moved into the shared Audio panel.
+
+### Fixed (review)
+- Loop restarts are cut at the measured length of the rendered playlist (VBR MP3 headers can be seconds off).
+- Volume above 100 % and the original-sound mix are limited and never clip; mono tracks keep their level.
+- Equal-power crossfades between songs; restart crossfades shrink instead of disappearing for short tracks.
+- Without loop, the fade-out happens at the end of the music, not in the silence after it.
+- Long playlists are not decoded beyond the video length; RF64 for very long WAV intermediates.
+- Typed fade-out length is kept even without pressing Enter; music files are checked when a paused job resumes.
+- Intermediate files of merges with music are always removed; tolerant loading of partial or newer project files.
+
 ## [0.2.0] - 2026-11-02
 ### Added
 - Compression tab: compress the selected clips (joined in the same pass, grouped like the merge mode) or any video file.

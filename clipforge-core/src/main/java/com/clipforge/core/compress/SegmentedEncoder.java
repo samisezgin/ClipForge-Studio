@@ -1,5 +1,8 @@
 package com.clipforge.core.compress;
 
+import com.clipforge.core.audio.AudioMode;
+import com.clipforge.core.audio.MusicRenderer;
+import com.clipforge.core.audio.MusicSettings;
 import com.clipforge.core.ffmpeg.CancellationToken;
 import com.clipforge.core.ffmpeg.FfmpegProcess;
 import com.clipforge.core.ffmpeg.FfmpegResult;
@@ -131,8 +134,13 @@ public final class SegmentedEncoder implements JobExecutor {
         CompressRecovery.discard(job);
     }
 
+    /** Whether the output gets an audio track: the original one, or background music. */
     private static boolean keepsAudio(CompressSpec spec) {
-        return spec.options().audio() == AudioMode.KEEP && spec.sourceHasAudio();
+        return switch (spec.options().audio()) {
+            case KEEP -> spec.sourceHasAudio();
+            case MUSIC -> true;
+            case REMOVE -> false;
+        };
     }
 
     // ------------------------------------------------------------------ planning
@@ -395,6 +403,49 @@ public final class SegmentedEncoder implements JobExecutor {
 
     private Outcome prepareAudio(JobRecord job, JobContext ctx, CompressSpec spec, Path work, Path audio)
             throws IOException {
+        if (spec.options().audio() == AudioMode.MUSIC) {
+            return prepareMusic(job, ctx, spec, work, audio);
+        }
+        return extractOriginal(job, ctx, spec, work, audio);
+    }
+
+    private Outcome prepareMusic(JobRecord job, JobContext ctx, CompressSpec spec, Path work, Path audio)
+            throws IOException {
+        MusicSettings s = spec.options().music();
+        Path original = null;
+        if (s.mixOriginal() && spec.sourceHasAudio()) {
+            original = work.resolve("original.m4a");
+            Outcome o = extractOriginal(job, ctx, spec, work, original);
+            if (o != null) {
+                return o;
+            }
+        }
+        CancellationToken token = new CancellationToken();
+        ctx.track(token);
+        try {
+            FfmpegResult r = new MusicRenderer(tools).render(s, spec.totalDurationMs() / 1000.0, original, work,
+                    audio, token);
+            if (r.cancelled()) {
+                Files.deleteIfExists(audio);
+                return ctx.cancelRequested() ? cancelAndClean(spec) : Outcome.PAUSED;
+            }
+            if (!r.success()) {
+                Files.deleteIfExists(audio);
+                return fail(job, ctx, "error.ffmpeg", tail(r), String.valueOf(r.exitCode()));
+            }
+            return null;
+        } catch (MusicRenderer.TrackException e) {
+            return fail(job, ctx, "error.musicTrack", null, e.track());
+        } finally {
+            ctx.untrack(token);
+            if (original != null) {
+                Files.deleteIfExists(original);
+            }
+        }
+    }
+
+    private Outcome extractOriginal(JobRecord job, JobContext ctx, CompressSpec spec, Path work, Path audio)
+            throws IOException {
         List<String> input = audioInputArgs(spec, work);
         for (boolean copy : new boolean[]{true, false}) {
             List<String> cmd = new ArrayList<>();
@@ -431,15 +482,25 @@ public final class SegmentedEncoder implements JobExecutor {
         Path audio = work.resolve("audio.m4a");
         boolean withAudio = keepsAudio(spec);
         if (withAudio && !Files.isRegularFile(audio)) {
+            // deleted meanwhile (e.g. by a clean-up tool): prepare it again
             synchronized (ctx.lock()) {
                 state.setAudioReady(false);
             }
-            return fail(job, ctx, "error.audioMissing", null);
+            Outcome a = prepareAudio(job, ctx, spec, work, audio);
+            if (a != null) {
+                return a;
+            }
+            synchronized (ctx.lock()) {
+                state.setAudioReady(true);
+            }
+            ctx.save();
         }
         Path muxed = work.resolve("final.mp4");
-        // keep the source's offset between video and audio start (both tracks start at 0 in our files)
+        // keep the source's offset between video and audio start (both tracks start at 0 in our files);
+        // background music simply starts with the video
         CompressInput first = spec.sources().getFirst();
-        double avOffset = (first.videoStartUs() - first.audioStartUs()) / 1e6;
+        double avOffset = spec.options().audio() == AudioMode.KEEP
+                ? (first.videoStartUs() - first.audioStartUs()) / 1e6 : 0;
         List<String> cmd = new ArrayList<>(List.of(tools.ffmpeg().toString()));
         if (withAudio && avOffset > 0.001) {
             cmd.addAll(List.of("-itsoffset", seconds(avOffset)));

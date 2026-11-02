@@ -39,7 +39,12 @@ public final class MergeExecutor implements JobExecutor {
         CancellationToken token = new CancellationToken();
         ctx.track(token);
         try {
-            FfmpegResult r = merge.merge(spec, ctx::progress, token);
+            FfmpegResult r;
+            try {
+                r = merge.merge(spec, ctx::progress, token);
+            } catch (com.clipforge.core.audio.MusicRenderer.TrackException e) {
+                return fail(job, ctx, "error.musicTrack", null, e.track());
+            }
             if (r.success() && Files.isRegularFile(out)) {
                 return Outcome.DONE;
             }
@@ -49,6 +54,13 @@ public final class MergeExecutor implements JobExecutor {
             return fail(job, ctx, "error.ffmpeg", tail(r.stderrText().lines().toList()), String.valueOf(r.exitCode()));
         } finally {
             ctx.untrack(token);
+        }
+    }
+
+    @Override
+    public void discard(JobRecord job) {
+        if (job.getMerge() != null) {
+            MergeService.discard(job.getMerge());
         }
     }
 

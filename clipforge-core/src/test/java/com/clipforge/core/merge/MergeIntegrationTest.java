@@ -107,6 +107,37 @@ class MergeIntegrationTest {
     }
 
     @Test
+    void mergeWithoutAudio() throws Exception {
+        List<Session> sessions = scan();
+        MergeSpec spec = MergePlanner.plan(sessions, all(sessions), MergeMode.ALL_IN_ONE, out,
+                new MergeOptions(false, com.clipforge.core.audio.AudioMode.REMOVE,
+                        com.clipforge.core.audio.MusicSettings.DEFAULT)).getFirst();
+        FfmpegResult r = new MergeService(tools).merge(spec, null, null);
+        assertTrue(r.success(), r.stderrText());
+        MediaInfo m = new ProbeService(tools).probe(Path.of(spec.output())).orElseThrow();
+        assertFalse(m.hasAudio(), "audio removed");
+        assertEquals("h264", m.videoCodec());
+    }
+
+    @Test
+    void mergeWithLoopingBackgroundMusic() throws Exception {
+        Path music = tmp.resolve("şarkı.mp3");
+        FfmpegTestSupport.run(List.of(tools.ffmpeg().toString(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                "sine=frequency=500:duration=2.5", "-c:a", "libmp3lame", music.toString()));
+        List<Session> sessions = scan();
+        var settings = new com.clipforge.core.audio.MusicSettings(List.of(music.toString()), true, 0.5, true, 2,
+                0.8, false, 0.2);
+        MergeSpec spec = MergePlanner.plan(sessions, all(sessions), MergeMode.ALL_IN_ONE, out,
+                new MergeOptions(false, com.clipforge.core.audio.AudioMode.MUSIC, settings)).getFirst();
+        FfmpegResult r = new MergeService(tools).merge(spec, null, null);
+        assertTrue(r.success(), r.stderrText());
+        MediaInfo m = new ProbeService(tools).probe(Path.of(spec.output())).orElseThrow();
+        assertEquals("aac", m.audioCodec());
+        assertEquals(12.0, m.duration().toMillis() / 1000.0, 0.3);
+        assertFalse(Files.exists(Path.of(spec.output() + ".work")), "work folder removed");
+    }
+
+    @Test
     void cancelledMergeLeavesNoFile() throws Exception {
         List<Session> sessions = scan();
         MergeSpec spec = MergePlanner.plan(sessions, all(sessions), MergeMode.ALL_IN_ONE, out,

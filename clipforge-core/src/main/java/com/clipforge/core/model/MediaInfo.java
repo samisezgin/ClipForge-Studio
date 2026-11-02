@@ -16,6 +16,7 @@ import java.time.Instant;
  * @param creationTime {@code creation_time} container tag, {@code null} if absent
  * @param videoStart   {@code start_time} of the first video stream (often non-zero, e.g. after an edit list)
  * @param audioStart   {@code start_time} of the first audio stream
+ * @param audioChannels channel count of the first audio stream, 0 if unknown
  */
 public record MediaInfo(
         Duration duration,
@@ -27,7 +28,8 @@ public record MediaInfo(
         int dataStreams,
         Instant creationTime,
         Duration videoStart,
-        Duration audioStart) {
+        Duration audioStart,
+        int audioChannels) {
 
     public MediaInfo {
         videoStart = videoStart == null ? Duration.ZERO : videoStart;
@@ -38,7 +40,7 @@ public record MediaInfo(
     public MediaInfo(Duration duration, String videoCodec, int width, int height, double frameRate,
                      String audioCodec, int dataStreams, Instant creationTime) {
         this(duration, videoCodec, width, height, frameRate, audioCodec, dataStreams, creationTime,
-                Duration.ZERO, Duration.ZERO);
+                Duration.ZERO, Duration.ZERO, 0);
     }
 
     public boolean hasVideo() {

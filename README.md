@@ -3,7 +3,7 @@
 Desktop tool for working with segmented video recordings (dash cams, phones, action cameras, screen recorders):
 
 - **Merge** clip segments losslessly (stream copy) — per continuous session or all selected clips into one file.
-- **Re-score audio** — keep, remove, or replace with looping background music (crossfade + optional fade-out). *(planned, phase 3)*
+- **Re-score audio** — keep, remove, or replace with a looping music playlist (seamless crossfade at every restart, optional fade-out, volume, optional quiet mix of the original sound) — for merging and compression.
 - **Compress** large recordings with AV1/HEVC (NVENC, SVT-AV1, x265) in resumable segments; the output grows while encoding and can be watched, pause/stop/crash lose at most the segments in progress.
 - **Telemetry** (GPS/speed) visualisation where the camera embeds it. *(planned, phase 4)*
 

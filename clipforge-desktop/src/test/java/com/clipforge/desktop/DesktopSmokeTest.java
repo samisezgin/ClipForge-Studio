@@ -71,6 +71,7 @@ class DesktopSmokeTest {
     void addScanMergeAndSnapshot() throws Exception {
         Optional<FfmpegTools> tools = FfmpegLocator.locate(null);
         assumeTrue(tools.isPresent(), "FFmpeg not installed");
+        assumeTrue(tools.isPresent(), "FFmpeg not installed");
         Path folder = Files.createDirectories(tmp.resolve("1 kasım araç kayıt"));
         makeClip(tools.get(), folder.resolve("NO20261101-100000-000001F.mp4"));
         makeClip(tools.get(), folder.resolve("NO20261101-100003-000002F.mp4"));
@@ -114,7 +115,21 @@ class DesktopSmokeTest {
         // compression through the controller, the same path the Compress button uses
         waitUntil(() -> onFxQuiet(() -> controller.encodersProperty().get() != null));
         boolean canCompress = onFx(() -> controller.compressOptions() != null);
+        Stage[] stageRef = {stage};
         if (canCompress) {
+            Path tune = tmp.resolve("müzik.mp3");
+            Process mp = new ProcessBuilder(tools.get().ffmpeg().toString(), "-v", "error", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=600:duration=2", "-c:a", "libmp3lame", tune.toString())
+                    .redirectErrorStream(true).start();
+            mp.getOutputStream().close();
+            mp.getInputStream().readAllBytes();
+            assertEquals(0, mp.waitFor());
+            onFx(() -> {
+                controller.setAudio(com.clipforge.core.audio.AudioMode.MUSIC,
+                        com.clipforge.core.audio.MusicSettings.DEFAULT.withTracks(List.of(tune.toString())));
+                // the audio panel reads the project on load; rebuild the view to show the music settings
+                return null;
+            });
             onFx(() -> {
                 controller.setCompressSource(false, null);
                 AppController.CompressPlan plan = controller.planCompress();
@@ -128,19 +143,34 @@ class DesktopSmokeTest {
             try (var files = Files.list(outDir)) {
                 assertEquals(4, files.filter(f -> f.toString().endsWith(".mp4")).count(), "no part/work files left");
             }
+            try (var files = Files.list(outDir)) {
+                for (Path f : files.filter(x -> x.getFileName().toString().contains("_av1")).toList()) {
+                    var m = new com.clipforge.core.ffmpeg.ProbeService(tools.get()).probe(f).orElseThrow();
+                    assertEquals("aac", m.audioCodec(), "background music in " + f.getFileName());
+                }
+            }
+            Stage musicStage = onFx(() -> {
+                stage.close();
+                return show(controller, "en");
+            });
+            stageRef[0] = musicStage;
             onFx(() -> {
-                var tabs = (javafx.scene.control.TabPane) stage.getScene().lookup(".tab-pane");
+                var tabs = (javafx.scene.control.TabPane) stageRef[0].getScene().lookup(".tab-pane");
                 tabs.getSelectionModel().select(1);
                 return null;
             });
             Thread.sleep(300);
-            snapshot(stage, OUT.resolve("ui-compress-en.png"));
+            snapshot(stageRef[0], OUT.resolve("ui-compress-en.png"));
+            onFx(() -> {
+                stageRef[0].close();
+                return null;
+            });
         }
 
         Messages.use("tr", List.of());
         Stage trStage = onFx(() -> {
             controller.retranslate();
-            stage.close();
+            stageRef[0].close();
             return show(controller, "tr");
         });
         Thread.sleep(300);

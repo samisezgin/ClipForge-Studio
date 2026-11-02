@@ -21,6 +21,8 @@ public final class JobRecord {
     private MergeSpec merge;
     private CompressState compress;
     private List<Fingerprint> sources = new ArrayList<>();
+    /** Music files of the job (background music); checked separately so a changed track only redoes the audio. */
+    private List<Fingerprint> musicSources = new ArrayList<>();
     private Instant created;
     private Instant updated;
     private String errorKey;
@@ -101,6 +103,14 @@ public final class JobRecord {
 
     public void setSources(List<Fingerprint> sources) {
         this.sources = sources == null ? new ArrayList<>() : new ArrayList<>(sources);
+    }
+
+    public List<Fingerprint> getMusicSources() {
+        return musicSources;
+    }
+
+    public void setMusicSources(List<Fingerprint> musicSources) {
+        this.musicSources = musicSources == null ? new ArrayList<>() : new ArrayList<>(musicSources);
     }
 
     public Instant getCreated() {

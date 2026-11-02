@@ -1,6 +1,6 @@
 package com.clipforge.desktop;
 
-import com.clipforge.core.compress.AudioMode;
+import com.clipforge.core.audio.AudioMode;
 import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.compress.CompressPlanner;
 import com.clipforge.core.compress.CompressSampler;
@@ -578,6 +578,92 @@ public final class AppController {
         scheduleSave();
     }
 
+    // ------------------------------------------------------------------ audio settings (merge and compression)
+
+    /** File name for {@code error.musicMissing}. */
+    private String missingTrack = "";
+
+    public com.clipforge.core.audio.AudioMode audioMode() {
+        return project.getAudioMode();
+    }
+
+    public com.clipforge.core.audio.MusicSettings music() {
+        return project.getMusic();
+    }
+
+    public void setAudio(com.clipforge.core.audio.AudioMode mode, com.clipforge.core.audio.MusicSettings music) {
+        if (mode == project.getAudioMode() && music.equals(project.getMusic())) {
+            return;
+        }
+        synchronized (project) {
+            project.setAudioMode(mode);
+            project.setMusic(music);
+        }
+        scheduleSave();
+    }
+
+    /** Validates the music selection; returns an i18n error key (or key|file) or {@code null}. */
+    private String audioError() {
+        if (project.getAudioMode() != com.clipforge.core.audio.AudioMode.MUSIC) {
+            return null;
+        }
+        List<String> tracks = project.getMusic().tracks();
+        if (tracks.isEmpty()) {
+            return "error.noMusic";
+        }
+        for (String t : tracks) {
+            if (!Files.isRegularFile(Path.of(t))) {
+                missingTrack = Path.of(t).getFileName().toString();
+                return "error.musicMissing";
+            }
+        }
+        return null;
+    }
+
+    /** Total length of the music playlist in seconds, measured in the background. */
+    public void measureMusic(java.util.function.Consumer<Double> result) {
+        FfmpegTools t = tools.get();
+        List<String> tracks = project.getMusic().tracks();
+        if (t == null || tracks.isEmpty()) {
+            result.accept(-1.0); // cannot measure without FFmpeg
+            return;
+        }
+        Thread.ofVirtual().start(() -> {
+            double total;
+            try {
+                total = new com.clipforge.core.audio.MusicRenderer(t).durations(tracks).stream()
+                        .mapToDouble(Double::doubleValue).sum();
+            } catch (IOException e) {
+                total = -1;
+            }
+            double v = total;
+            Platform.runLater(() -> result.accept(v));
+        });
+    }
+
+    // ------------------------------------------------------------------ telemetry
+
+    /** Reads the telemetry of the clips (joined on one timeline) in the background. */
+    public void readTelemetry(List<Clip> clips, java.util.function.Consumer<com.clipforge.core.telemetry.Telemetry> done,
+                              java.util.function.Consumer<String> failed) {
+        FfmpegTools t = tools.get();
+        if (t == null) {
+            failed.accept(Messages.get("error.noFfmpeg"));
+            return;
+        }
+        List<Path> paths = clips.stream().map(Clip::path).toList();
+        List<java.time.Duration> durations = clips.stream().map(Clip::duration).toList();
+        Thread.ofVirtual().start(() -> {
+            try {
+                var telemetry = new com.clipforge.core.telemetry.TelemetryService(t, ZoneId.systemDefault())
+                        .read(paths, durations);
+                Platform.runLater(() -> done.accept(telemetry));
+            } catch (Exception e) {
+                Platform.runLater(() -> failed.accept(String.valueOf(e.getMessage())));
+            }
+        });
+    }
+
     // ------------------------------------------------------------------ compression settings
 
     public ObjectProperty<java.util.Set<EncoderProfile>> encodersProperty() {
@@ -645,8 +731,18 @@ public final class AppController {
      */
     /** Plans in the background (probing a 50 GB file or a slow drive must not freeze the UI). */
     public void planCompressAsync(java.util.function.Consumer<CompressPlan> result) {
+        planCompressAsync(result, false);
+    }
+
+    /** @param forSample the sample is video only, so the music selection is not validated */
+    public void planCompressAsync(java.util.function.Consumer<CompressPlan> result, boolean forSample) {
         ensureOutputDir();
-        CompressInputs in = new CompressInputs(tools.get(), compressOptions(), project.getOutputDir(),
+        String audioErr = forSample ? null : audioError();
+        if (audioErr != null) {
+            result.accept(CompressPlan.error(audioErr, missingTrack));
+            return;
+        }
+        CompressInputs in = new CompressInputs(tools.get(), withAudio(compressOptions()), project.getOutputDir(),
                 project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions), Set.copyOf(selected),
                 project.getMergeMode(), project.getMergeOptions(), reservedOutputs(), selectedClips().isEmpty());
         Thread.ofVirtual().start(() -> {
@@ -662,6 +758,10 @@ public final class AppController {
         });
     }
 
+    private CompressOptions withAudio(CompressOptions o) {
+        return o == null ? null : o.withAudio(project.getAudioMode(), project.getMusic());
+    }
+
     /** Snapshot of everything planning needs, taken on the FX thread. */
     private record CompressInputs(FfmpegTools tools, CompressOptions options, String outputDir, boolean fromFile,
                                   String file, List<Session> sessions, Set<Path> selected, MergeMode mode,
@@ -671,7 +771,11 @@ public final class AppController {
     /** Synchronous planning on the current thread (tests). */
     public CompressPlan planCompress() {
         ensureOutputDir();
-        return planCompress(new CompressInputs(tools.get(), compressOptions(), project.getOutputDir(),
+        String audioErr = audioError();
+        if (audioErr != null) {
+            return CompressPlan.error(audioErr, missingTrack);
+        }
+        return planCompress(new CompressInputs(tools.get(), withAudio(compressOptions()), project.getOutputDir(),
                 project.isCompressFromFile(), project.getCompressFile(), List.copyOf(sessions), Set.copyOf(selected),
                 project.getMergeMode(), project.getMergeOptions(), reservedOutputs(), selectedClips().isEmpty()));
     }
@@ -770,7 +874,9 @@ public final class AppController {
             for (String in : s.inputs()) {
                 fps.add(Fingerprint.of(Path.of(in)));
             }
-            created.add(JobRecord.compress(s, fps, clock.instant()));
+            JobRecord job = JobRecord.compress(s, fps, clock.instant());
+            job.setMusicSources(musicFingerprints(s.options().audio(), s.options().music()));
+            created.add(job);
         }
         return created;
     }
@@ -803,6 +909,25 @@ public final class AppController {
         });
     }
 
+    /** Deletes partial files of a merge or compression job that will not continue. */
+    private static void discardFiles(JobRecord job) {
+        if (job.getMerge() != null) {
+            com.clipforge.core.merge.MergeService.discard(job.getMerge());
+        }
+        com.clipforge.core.compress.CompressRecovery.discard(job);
+    }
+
+    private static List<Fingerprint> musicFingerprints(com.clipforge.core.audio.AudioMode mode,
+                                                       com.clipforge.core.audio.MusicSettings music) throws IOException {
+        List<Fingerprint> list = new ArrayList<>();
+        if (mode == com.clipforge.core.audio.AudioMode.MUSIC) {
+            for (String t : music.tracks()) {
+                list.add(Fingerprint.of(Path.of(t)));
+            }
+        }
+        return list;
+    }
+
     private List<Path> reservedOutputs() {
         synchronized (project) {
             return project.getJobs().stream().filter(j -> j.getState().unfinished() && j.output() != null)
@@ -820,6 +945,10 @@ public final class AppController {
         if (selectedClips().isEmpty()) {
             return MergePlan.error("error.noSelection");
         }
+        String audioErr = audioError();
+        if (audioErr != null) {
+            return MergePlan.error(audioErr, missingTrack);
+        }
         ensureOutputDir();
         String out = project.getOutputDir();
         if (out == null || out.isBlank()) {
@@ -834,7 +963,7 @@ public final class AppController {
                         .map(j -> Path.of(j.output())).toList();
             }
             List<MergeSpec> specs = MergePlanner.plan(sessions, selected, project.getMergeMode(), outDir,
-                    project.getMergeOptions(), reserved);
+                    project.getMergeOptions().withAudio(project.getAudioMode(), project.getMusic()), reserved);
             long total = specs.stream().mapToLong(MergeSpec::totalBytes).sum();
             long largest = specs.stream().mapToLong(MergeSpec::totalBytes).max().orElse(0);
             DiskCheck.Result disk = DiskCheck.check(outDir, total, largest);
@@ -861,7 +990,9 @@ public final class AppController {
             for (String in : s.inputs()) {
                 fps.add(Fingerprint.of(Path.of(in)));
             }
-            created.add(JobRecord.merge(s, fps, clock.instant()));
+            JobRecord job = JobRecord.merge(s, fps, clock.instant());
+            job.setMusicSources(musicFingerprints(s.options().audio(), s.options().music()));
+            created.add(job);
         }
         if (queue == null) {
             throw new IOException(Messages.get("error.noFfmpeg"));
@@ -917,7 +1048,7 @@ public final class AppController {
         }
         // failed or cancelled compression jobs may still hold a growing output and segments
         removed.stream().filter(j -> j.getState() != com.clipforge.core.project.JobState.DONE)
-                .forEach(com.clipforge.core.compress.CompressRecovery::discard);
+                .forEach(AppController::discardFiles);
         jobs.setAll(project.getJobs());
         progress.keySet().retainAll(project.getJobs().stream().map(JobRecord::getId).toList());
         saveNow();
@@ -933,10 +1064,15 @@ public final class AppController {
             synchronized (project) {
                 try {
                     if (i.kind() == RecoveryService.Kind.SOURCE_CHANGED) {
+                        boolean video = RecoveryService.videoSourcesChanged(i.job());
                         RecoveryService.acceptChangedSources(i.job());
                         if (i.job().getCompress() != null) {
-                            // segments encoded from the old source must not be joined with new ones
-                            com.clipforge.core.compress.CompressRecovery.restart(i.job().getCompress());
+                            if (video) {
+                                // segments encoded from the old source must not be joined with new ones
+                                com.clipforge.core.compress.CompressRecovery.restart(i.job().getCompress());
+                            } else {
+                                i.job().getCompress().setAudioReady(false); // only the music changed
+                            }
                         }
                     }
                     RecoveryService.prepareResume(i.job(), clock.instant());
@@ -972,7 +1108,7 @@ public final class AppController {
         synchronized (project) {
             for (RecoveryService.Issue i : issues) {
                 i.job().setState(com.clipforge.core.project.JobState.CANCELLED);
-                com.clipforge.core.compress.CompressRecovery.discard(i.job());
+                discardFiles(i.job());
                 if (i.job().output() != null) {
                     try {
                         Files.deleteIfExists(com.clipforge.core.util.OutputNaming.partOf(Path.of(i.job().output())));

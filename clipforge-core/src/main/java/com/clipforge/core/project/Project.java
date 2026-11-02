@@ -1,5 +1,7 @@
 package com.clipforge.core.project;
 
+import com.clipforge.core.audio.AudioMode;
+import com.clipforge.core.audio.MusicSettings;
 import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.merge.MergeMode;
 import com.clipforge.core.merge.MergeOptions;
@@ -24,6 +26,8 @@ public final class Project {
     private CompressOptions compressOptions;
     private boolean compressFromFile;
     private String compressFile;
+    private AudioMode audioMode = AudioMode.KEEP;
+    private MusicSettings music = MusicSettings.DEFAULT;
     private List<JobRecord> jobs = new ArrayList<>();
 
     public int getFormatVersion() {
@@ -106,6 +110,23 @@ public final class Project {
 
     public void setCompressFile(String compressFile) {
         this.compressFile = compressFile;
+    }
+
+    /** Audio handling for new merge and compression jobs. */
+    public AudioMode getAudioMode() {
+        return audioMode;
+    }
+
+    public void setAudioMode(AudioMode audioMode) {
+        this.audioMode = audioMode == null ? AudioMode.KEEP : audioMode;
+    }
+
+    public MusicSettings getMusic() {
+        return music;
+    }
+
+    public void setMusic(MusicSettings music) {
+        this.music = music == null ? MusicSettings.DEFAULT : music;
     }
 
     public List<JobRecord> getJobs() {

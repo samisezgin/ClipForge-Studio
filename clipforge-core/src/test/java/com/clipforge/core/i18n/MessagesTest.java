@@ -43,6 +43,22 @@ class MessagesTest {
         assertTrue(Messages.get("error.fat32", "FAT32").contains("4 GB'tan"), "'' becomes an apostrophe");
     }
 
+    /** MessageFormat swallows a single apostrophe; every literal one must be written as ''. */
+    @Test
+    void noLoneApostrophes() throws Exception {
+        for (String name : List.of("/i18n/messages.properties", "/i18n/messages_tr.properties")) {
+            java.util.Properties p = new java.util.Properties();
+            try (var in = new java.io.InputStreamReader(Messages.class.getResourceAsStream(name),
+                    StandardCharsets.UTF_8)) {
+                p.load(in);
+            }
+            for (String key : p.stringPropertyNames()) {
+                String v = p.getProperty(key).replace("''", "");
+                assertTrue(v.indexOf('\'') < 0, name + " " + key + " has a single apostrophe");
+            }
+        }
+    }
+
     @Test
     void unknownKeyIsVisible() {
         assertEquals("!no.such.key!", Messages.get("no.such.key"));
