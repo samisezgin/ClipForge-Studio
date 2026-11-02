@@ -5,6 +5,7 @@ import com.clipforge.core.audio.AudioMode;
 import com.clipforge.core.compress.CompressOptions;
 import com.clipforge.core.compress.CompressSampler;
 import com.clipforge.core.compress.EncoderProfile;
+import com.clipforge.core.compress.QualityBand;
 import com.clipforge.core.i18n.Messages;
 import com.clipforge.core.util.Formats;
 import com.clipforge.desktop.AppController;
@@ -58,6 +59,9 @@ public final class CompressPanel extends VBox {
     private boolean loading;
     private boolean sampling;
     private boolean optionsUsable;
+    /** All quality ranges of the chosen encoder; the one the slider is in is highlighted. */
+    private final VBox bands = new VBox(2);
+    private final Label[] bandLabels = new Label[QualityBand.values().length];
     private final Label summary = new Label();
     private final Label encoderNote = new Label();
 
@@ -99,6 +103,7 @@ public final class CompressPanel extends VBox {
                 quality.setValue(p.defaultQuality());
                 parallel.getValueFactory().setValue(p.defaultConcurrency());
                 loading = false;
+                updateBands();
                 saveOptions();
             }
         });
@@ -112,11 +117,20 @@ public final class CompressPanel extends VBox {
                 return;
             }
             qualityValue.setText(Messages.get("compress.quality.value", Math.round(rounded)));
+            updateBands();
             saveOptions();
         });
         quality.setTooltip(new Tooltip(Messages.get("compress.quality.tip")));
         HBox qualityRow = new HBox(8, quality, qualityValue);
         HBox.setHgrow(quality, Priority.ALWAYS);
+        for (int i = 0; i < bandLabels.length; i++) {
+            Label l = new Label();
+            l.getStyleClass().addAll("quality-band", Styles.TEXT_SMALL);
+            l.setWrapText(true);
+            l.setMaxWidth(Double.MAX_VALUE);
+            bandLabels[i] = l;
+            bands.getChildren().add(l);
+        }
 
         segment.setConverter(new StringConverter<>() {
             @Override
@@ -171,7 +185,7 @@ public final class CompressPanel extends VBox {
         encoderNote.getStyleClass().addAll(Styles.TEXT_SMALL, Styles.WARNING);
         getChildren().addAll(fromSelection, fromFile, fileRow, summary, new Separator(),
                 new Label(Messages.get("compress.encoder")), encoder, encoderNote,
-                new Label(Messages.get("compress.quality")), qualityRow, grid, overlay,
+                new Label(Messages.get("compress.quality")), qualityRow, bands, grid, overlay,
                 new Separator(),
                 sampleButton, sampleResult, startButton, note);
 
@@ -217,6 +231,26 @@ public final class CompressPanel extends VBox {
 
         } finally {
             loading = false;
+            updateBands();
+        }
+    }
+
+    private void updateBands() {
+        EncoderProfile p = encoder.getValue();
+        bands.setVisible(p != null);
+        bands.setManaged(p != null);
+        if (p == null) {
+            return;
+        }
+        QualityBand active = p.band((int) Math.round(quality.getValue()));
+        for (QualityBand b : QualityBand.values()) {
+            Label l = bandLabels[b.ordinal()];
+            int[] r = p.range(b);
+            l.setText(Messages.get("compress.band.range", r[0], r[1], Messages.get("compress.band." + b.name())));
+            l.getStyleClass().remove("active");
+            if (b == active) {
+                l.getStyleClass().add("active");
+            }
         }
     }
 

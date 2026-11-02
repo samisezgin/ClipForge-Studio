@@ -16,10 +16,11 @@ public enum EncoderProfile {
     //   AV1 NVENC CQ 36 -> 6.8 Mbps / VMAF 92, CQ 40 -> 4.3 Mbps / 88.7 (7.5x realtime on an RTX 4070 Ti)
     //   HEVC NVENC CQ 32 -> 6.4 Mbps / 90.7 (3.7x), SVT-AV1 p6 CRF 35 -> 3.8 Mbps / 90.6 (2x on a Ryzen 9 5950X)
     // Note the scales differ: av1_nvenc CQ is 0-63, hevc_nvenc 0-51, SVT-AV1 CRF 0-63, x265 CRF 0-51.
-    AV1_NVENC("av1_nvenc", true, 24, 56, 38, 2, 150),
-    HEVC_NVENC("hevc_nvenc", true, 20, 42, 32, 2, 150),
-    SVT_AV1("libsvtav1", false, 20, 55, 35, 1, 45),
-    X265("libx265", false, 16, 36, 26, 1, 30);
+    // The last three numbers are the highest value of TRANSPARENT, VERY_GOOD and GOOD; above that is SMALL.
+    AV1_NVENC("av1_nvenc", true, 24, 56, 38, 2, 150, 32, 36, 40),
+    HEVC_NVENC("hevc_nvenc", true, 20, 42, 32, 2, 150, 26, 30, 34),
+    SVT_AV1("libsvtav1", false, 20, 55, 35, 1, 45, 28, 32, 38),
+    X265("libx265", false, 16, 36, 26, 1, 30, 20, 23, 28);
 
     private final String encoder;
     private final boolean hardware;
@@ -28,9 +29,11 @@ public enum EncoderProfile {
     private final int defaultQuality;
     private final int defaultConcurrency;
     private final int defaultSegmentSeconds;
+    private final int[] bandLimits;
 
     EncoderProfile(String encoder, boolean hardware, int minQuality, int maxQuality, int defaultQuality,
-                   int defaultConcurrency, int defaultSegmentSeconds) {
+                   int defaultConcurrency, int defaultSegmentSeconds, int... bandLimits) {
+        this.bandLimits = bandLimits;
         this.encoder = encoder;
         this.hardware = hardware;
         this.minQuality = minQuality;
@@ -69,6 +72,24 @@ public enum EncoderProfile {
     /** Initial segment length before the speed-based automatic adjustment kicks in. */
     public int defaultSegmentSeconds() {
         return defaultSegmentSeconds;
+    }
+
+    /** The band a quality value falls into. */
+    public QualityBand band(int quality) {
+        for (int i = 0; i < bandLimits.length; i++) {
+            if (quality <= bandLimits[i]) {
+                return QualityBand.values()[i];
+            }
+        }
+        return QualityBand.SMALL;
+    }
+
+    /** Inclusive value range of a band within the slider range, as {@code {from, to}}. */
+    public int[] range(QualityBand band) {
+        int i = band.ordinal();
+        int from = i == 0 ? minQuality : bandLimits[i - 1] + 1;
+        int to = i < bandLimits.length ? bandLimits[i] : maxQuality;
+        return new int[] {from, to};
     }
 
     /** Short codec tag used in output names, e.g. {@code av1}. */
