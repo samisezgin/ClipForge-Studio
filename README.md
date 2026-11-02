@@ -52,6 +52,7 @@ The UI is fully translatable. See [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-lan
 
 - [Implementation plan](docs/PLAN.md)
 - [Pause & recovery design](docs/RECOVERY.md)
+- [End-to-end test](docs/E2E.md)
 
 ## License
 

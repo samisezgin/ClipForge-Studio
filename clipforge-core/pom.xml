@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.clipforge</groupId>
         <artifactId>clipforge-parent</artifactId>
-        <version>0.4.0</version>
+        <version>1.0.0</version>
     </parent>
 
     <artifactId>clipforge-core</artifactId>
