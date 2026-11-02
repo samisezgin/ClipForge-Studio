@@ -1,5 +1,7 @@
 package com.clipforge.core.compress;
 
+import com.clipforge.core.anonymize.Detectors;
+import com.clipforge.core.anonymize.FramePipeline;
 import com.clipforge.core.audio.AudioMode;
 import com.clipforge.core.audio.MusicRenderer;
 import com.clipforge.core.audio.MusicSettings;
@@ -60,10 +62,25 @@ public final class SegmentedEncoder implements JobExecutor {
     /** Rough output/input size ratio before anything has been encoded (for the free-space check). */
     private static final double INITIAL_SIZE_RATIO = 0.4;
 
+    /** "Hide plates and faces" searches every n-th frame; the frames in between get interpolated boxes. */
+    static final int HIDE_INTERVAL = 4;
+
+    /** Opens the plate/face detectors for a job (shared; {@code null} if the models are not installed). */
+    @FunctionalInterface
+    public interface DetectorSource {
+        Detectors open(CompressOptions.Hide hide) throws IOException;
+    }
+
     private final FfmpegTools tools;
+    private final DetectorSource detectorSource;
 
     public SegmentedEncoder(FfmpegTools tools) {
+        this(tools, null);
+    }
+
+    public SegmentedEncoder(FfmpegTools tools, DetectorSource detectorSource) {
         this.tools = tools;
+        this.detectorSource = detectorSource;
     }
 
     private record SegmentResult(SegmentRecord segment, FfmpegResult result, double wallSeconds) {
@@ -453,31 +470,75 @@ public final class SegmentedEncoder implements JobExecutor {
                     + "format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
                     norm.width(), norm.height(), norm.width(), norm.height());
         }
-        if (o.spedUp() || norm != null) {
-            // fps drops (or repeats) frames to the output rate, so every segment has the same rhythm
+        boolean hide = o.hides();
+        if (o.spedUp() || norm != null || hide) {
+            // fps drops (or repeats) frames to the output rate, so every segment has the same rhythm (and raw frames
+            // handed through a pipe have no timestamps of their own)
             vf += String.format(Locale.ROOT, ",fps=%.3f", fps);
+        }
+        int width = norm != null ? norm.width() : in.width() / 2 * 2;
+        int height = norm != null ? norm.height() : in.height() / 2 * 2;
+        if (hide) {
+            if (width <= 0 || height <= 0) {
+                return new SegmentResult(s, new FfmpegResult(1, false,
+                        List.of("Picture size of " + in.path() + " unknown; plan the job again")), 0);
+            }
+            // even size for 4:2:0 (a crop of at most one pixel)
+            vf += String.format(Locale.ROOT, ",crop=%d:%d:0:0,format=yuv420p", width, height);
         }
         // the filter graph goes through a file: its quoting does not survive every command-line parser
         Path vfFile = temp.resolveSibling(s.fileName() + ".vf.txt");
         Files.writeString(vfFile, vf, StandardCharsets.UTF_8);
         cmd.addAll(List.of("-i", in.path(), "-map", "0:v:0", "-/vf", vfFile.toString(), "-fps_mode", "passthrough"));
-        cmd.addAll(spec.options().profile().videoArgs(spec.options().quality()));
-        cmd.addAll(List.of("-an", "-sn", "-dn", "-video_track_timescale", String.valueOf(TIMESCALE),
+        List<String> output = new ArrayList<>(spec.options().profile().videoArgs(spec.options().quality()));
+        output.addAll(List.of("-an", "-sn", "-dn", "-video_track_timescale", String.valueOf(TIMESCALE),
                 "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "-y", temp.toString()));
         long t0 = System.nanoTime();
         Duration total = Duration.ofMillis(s.durationMs());
-        FfmpegResult r = FfmpegProcess.run(cmd, total, p -> {
-            // out_time is not usable with -copyts; frames are (one output frame per `speed` source frames)
-            long ms = Math.min(s.durationMs(), Math.round(p.frames() / fps * 1000 * o.speed()));
-            // FFmpeg's speed is in output time; the job counts source time
-            progress.accept(new Progress(Duration.ofMillis(ms), total, p.speed() * o.speed(), p.outputBytes(),
-                    p.frames()));
-        }, token);
+        FfmpegResult r;
+        if (hide) {
+            r = encodeHidden(cmd, output, width, height, fps, s, o, total, progress, token);
+        } else {
+            cmd.addAll(output);
+            r = FfmpegProcess.run(cmd, total, p -> {
+                // out_time is not usable with -copyts; frames are (one output frame per `speed` source frames)
+                long ms = Math.min(s.durationMs(), Math.round(p.frames() / fps * 1000 * o.speed()));
+                // FFmpeg's speed is in output time; the job counts source time
+                progress.accept(new Progress(Duration.ofMillis(ms), total, p.speed() * o.speed(), p.outputBytes(),
+                        p.frames()));
+            }, token);
+        }
         Files.deleteIfExists(vfFile);
         if (r.success() && !CompressRecovery.validSegment(temp, s, o.speed())) {
             r = new FfmpegResult(1, false, List.of("Encoded segment " + s.getIndex() + " is incomplete or too short"));
         }
         return new SegmentResult(s, r, (System.nanoTime() - t0) / 1e9);
+    }
+
+    /**
+     * "Hide plates and faces": the decoder writes raw frames, they are searched and blurred, and a second FFmpeg
+     * encodes them ({@link FramePipeline}).
+     */
+    private FfmpegResult encodeHidden(List<String> decode, List<String> output, int width, int height, double fps,
+                                      SegmentRecord s, CompressOptions o, Duration total, Consumer<Progress> progress,
+                                      CancellationToken token) throws IOException {
+        Detectors detectors = detectorSource == null ? null : detectorSource.open(o.hide());
+        if (detectors == null) {
+            return new FfmpegResult(1, false, List.of("The detection models are not installed"));
+        }
+        List<String> dec = new ArrayList<>(List.of(decode.getFirst(), "-hide_banner", "-nostats", "-loglevel", "error"));
+        dec.addAll(decode.subList(1, decode.size()));
+        dec.addAll(List.of("-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"));
+        List<String> enc = new ArrayList<>(List.of(decode.getFirst(), "-hide_banner", "-nostats", "-loglevel", "error",
+                "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", width + "x" + height,
+                "-framerate", String.format(Locale.ROOT, "%.3f", fps), "-i", "pipe:0"));
+        enc.addAll(output);
+        long t0 = System.nanoTime();
+        return new FramePipeline(detectors, HIDE_INTERVAL).run(dec, enc, width, height, frames -> {
+            long ms = Math.min(s.durationMs(), Math.round(frames / fps * 1000 * o.speed()));
+            double wall = (System.nanoTime() - t0) / 1e9;
+            progress.accept(new Progress(Duration.ofMillis(ms), total, wall > 0 ? ms / 1000.0 / wall : 0, -1, frames));
+        }, token);
     }
 
     private static void report(JobContext ctx, CompressState state, Map<SegmentRecord, Progress> live) {

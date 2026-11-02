@@ -25,7 +25,18 @@ public final class FfmpegLocator {
      * @param preferredDir directory configured by the user, may be {@code null}
      */
     public static Optional<FfmpegTools> locate(Path preferredDir) {
-        for (Path dir : candidateDirs(preferredDir)) {
+        return locate(preferredDir, null);
+    }
+
+    /**
+     * @param fallbackDir checked last, e.g. the copy ClipForge downloaded itself; may be {@code null}
+     */
+    public static Optional<FfmpegTools> locate(Path preferredDir, Path fallbackDir) {
+        List<Path> dirs = candidateDirs(preferredDir);
+        if (fallbackDir != null) {
+            dirs.add(fallbackDir);
+        }
+        for (Path dir : dirs) {
             Optional<FfmpegTools> tools = fromDir(dir);
             if (tools.isPresent()) {
                 return tools;

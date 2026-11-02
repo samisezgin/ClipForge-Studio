@@ -1,0 +1,41 @@
+[
+  {
+    "id": "ffmpeg",
+    "name": "FFmpeg 9.0.2 (essentials build by gyan.dev)",
+    "version": "9.0.2",
+    "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip",
+    "sha256": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
+    "size": 114768076,
+    "archive": "zip",
+    "files": ["ffmpeg.exe", "ffprobe.exe"],
+    "os": "windows",
+    "when": "noFfmpeg",
+    "license": "GPL-3.0 (FFmpeg is a separate program)"
+  },
+  {
+    "id": "plate-model",
+    "name": "License plate detector (YOLOv9-t 640, open-image-models)",
+    "version": "1",
+    "url": "https://github.com/ankandrew/open-image-models/releases/download/assets/yolo-v9-t-640-license-plates-end2end.onnx",
+    "sha256": "c3c1026ca7d0585dd88084d68182dd897113712fa734ae1557ca70174440c076",
+    "size": 7835770,
+    "archive": "file",
+    "files": ["plates.onnx"],
+    "os": "any",
+    "when": "always",
+    "license": "MIT (github.com/ankandrew/open-image-models)"
+  },
+  {
+    "id": "face-model",
+    "name": "Face detector (YuNet 2023mar, OpenCV Zoo)",
+    "version": "2023mar",
+    "url": "https://github.com/opencv/opencv_zoo/raw/f12e12798e8314f7c074a6656816c048dcc95b7a/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "size": 232589,
+    "archive": "file",
+    "files": ["faces.onnx"],
+    "os": "any",
+    "when": "always",
+    "license": "MIT (OpenCV Zoo)"
+  }
+]

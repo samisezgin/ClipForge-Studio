@@ -6,10 +6,14 @@ module com.clipforge.core {
     requires com.fasterxml.jackson.databind;
     requires com.fasterxml.jackson.annotation;
     requires com.fasterxml.jackson.datatype.jsr310;
+    requires java.net.http;
+    requires com.microsoft.onnxruntime;
 
     exports com.clipforge.core;
+    exports com.clipforge.core.anonymize;
     exports com.clipforge.core.audio;
     exports com.clipforge.core.compress;
+    exports com.clipforge.core.components;
     exports com.clipforge.core.ffmpeg;
     exports com.clipforge.core.i18n;
     exports com.clipforge.core.job;
@@ -27,4 +31,5 @@ module com.clipforge.core {
     opens com.clipforge.core.ffmpeg to com.fasterxml.jackson.databind;
     opens com.clipforge.core.compress to com.fasterxml.jackson.databind;
     opens com.clipforge.core.audio to com.fasterxml.jackson.databind;
+    opens com.clipforge.core.components to com.fasterxml.jackson.databind;
 }

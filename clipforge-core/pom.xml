@@ -24,6 +24,10 @@
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.microsoft.onnxruntime</groupId>
+            <artifactId>onnxruntime</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
@@ -53,6 +57,29 @@
                         <includeOnlyProperty>^git.dirty$</includeOnlyProperty>
                         <includeOnlyProperty>^git.build.version$</includeOnlyProperty>
                     </includeOnlyProperties>
+                </configuration>
+            </plugin>
+            <!-- tests serve downloads from a local HTTP server (jdk.httpserver) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <compilerArgs>
+                                <arg>--add-modules=jdk.httpserver</arg>
+                                <arg>--add-reads=com.clipforge.core=jdk.httpserver</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>--add-modules=jdk.httpserver --add-reads=com.clipforge.core=jdk.httpserver --enable-native-access=com.clipforge.core,com.microsoft.onnxruntime</argLine>
                 </configuration>
             </plugin>
         </plugins>

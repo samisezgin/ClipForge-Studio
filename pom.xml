@@ -34,6 +34,7 @@
         <atlantafx.version>3.0.0</atlantafx.version>
         <jackson.version>2.22.4</jackson.version>
         <junit.version>6.1.3</junit.version>
+        <onnxruntime.version>1.31.1</onnxruntime.version>
     </properties>
 
     <dependencyManagement>
@@ -52,6 +53,12 @@
                 <groupId>com.fasterxml.jackson.datatype</groupId>
                 <artifactId>jackson-datatype-jsr310</artifactId>
                 <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <!-- plate/face detection for "Hide plates and faces" (CPU; models are downloaded on demand) -->
+                <groupId>com.microsoft.onnxruntime</groupId>
+                <artifactId>onnxruntime</artifactId>
+                <version>${onnxruntime.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.openjfx</groupId>

@@ -1,8 +1,10 @@
 package com.clipforge.core.compress;
 
 import com.clipforge.core.FfmpegTestSupport;
+import com.clipforge.core.anonymize.Detectors;
 import com.clipforge.core.audio.AudioMode;
 import com.clipforge.core.audio.MusicSettings;
+import com.clipforge.core.components.ComponentManager;
 import com.clipforge.core.ffmpeg.FfmpegTools;
 import com.clipforge.core.ffmpeg.ProbeService;
 import com.clipforge.core.ffmpeg.Progress;
@@ -22,6 +24,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,6 +38,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -99,7 +104,7 @@ class SegmentedEncoderTest {
     }
 
     private void assertFinished(JobRecord job) throws Exception {
-        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals(JobState.DONE, job.getState(), job.getErrorKey() + " " + job.getErrorArgs() + " " + job.getErrorDetail());
         Path out = Path.of(job.output());
         MediaInfo m = new ProbeService(tools).probe(out).orElseThrow();
         assertEquals("av1", m.videoCodec());
@@ -132,7 +137,7 @@ class SegmentedEncoderTest {
         JobQueue q = queue(new Noop());
         q.submit(List.of(job));
         assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
-        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals(JobState.DONE, job.getState(), job.getErrorKey() + " " + job.getErrorArgs() + " " + job.getErrorDetail());
         Path out = Path.of(job.output());
         MediaInfo r = new ProbeService(tools).probe(out).orElseThrow();
         assertEquals(8.0, r.duration().toMillis() / 1000.0, 0.3, "20 s at 2.5x");
@@ -262,12 +267,55 @@ class SegmentedEncoderTest {
                 });
         q.submit(List.of(job));
         assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
-        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals(JobState.DONE, job.getState(), job.getErrorKey() + " " + job.getErrorArgs() + " " + job.getErrorDetail());
         assertEquals("a.mp4:running:permanent:true", order.get(0), String.valueOf(order));
         assertEquals(2, order.size(), String.valueOf(order));
         assertTrue(clips.stream().noneMatch(Files::exists), "both sources deleted");
         assertEquals(2, job.getDeletedSources().size());
         assertEquals(360, frames(Path.of(job.output())), "output complete although the sources are gone");
+    }
+
+    /** The real models, downloaded once into target/ (skipped without network). */
+    static SegmentedEncoder.DetectorSource testDetectors() {
+        var cm = new ComponentManager(Path.of("target", "test-components"),
+                ComponentManager.bundled());
+        Map<String, Detectors> cache = new ConcurrentHashMap<>();
+        return hide -> {
+            for (String id : List.of("plate-model", "face-model")) {
+                var c = cm.find(id).orElseThrow();
+                if (!cm.isInstalled(c)) {
+                    try {
+                        cm.install(c, null, null);
+                    } catch (IOException e) {
+                        assumeTrue(false, "models not downloadable: " + e.getMessage());
+                    }
+                }
+            }
+            return cache.computeIfAbsent(hide.plates() + "/" + hide.faces(), k -> {
+                try {
+                    return new Detectors(
+                            hide.plates() ? cm.file("plate-model", "plates.onnx").orElseThrow() : null,
+                            hide.faces() ? cm.file("face-model", "faces.onnx").orElseThrow() : null);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+        };
+    }
+
+    @Test
+    void hidingPlatesAndFacesKeepsEveryFrame() throws Exception {
+        MediaInfo m = new ProbeService(tools).probe(source).orElseThrow();
+        CompressOptions o = new CompressOptions(profile, profile.defaultQuality(), 6, 2, AudioMode.KEEP)
+                .withHide(new CompressOptions.Hide(true, true));
+        CompressSpec spec = CompressPlanner.forFile(source, Files.size(source), m,
+                Files.createDirectories(tmp.resolve("çıktı-gizli")), o, List.of());
+        JobRecord job = JobRecord.compress(spec, List.of(), Clock.systemUTC().instant());
+        JobQueue q = new JobQueue(project, Map.<JobType, JobExecutor>of(JobType.COMPRESS,
+                new SegmentedEncoder(tools, testDetectors())), () -> { }, new Noop(), Clock.systemUTC());
+        q.submit(List.of(job));
+        assertTrue(q.awaitIdle(Duration.ofMinutes(5)));
+        assertFinished(job);
     }
 
     @Test
@@ -295,7 +343,7 @@ class SegmentedEncoderTest {
         JobQueue q = queue(new Noop());
         q.submit(List.of(job));
         assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
-        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals(JobState.DONE, job.getState(), job.getErrorKey() + " " + job.getErrorArgs() + " " + job.getErrorDetail());
         MediaInfo m = probe.probe(out).orElseThrow();
         assertEquals("320x180", m.resolution(), "the first video's size");
         assertEquals(30, m.frameRate(), 0.5);
@@ -344,7 +392,7 @@ class SegmentedEncoderTest {
                 });
         q.submit(List.of(job));
         assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
-        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals(JobState.DONE, job.getState(), job.getErrorKey() + " " + job.getErrorArgs() + " " + job.getErrorDetail());
         assertEquals(List.of("a.mp4"), removed);
         assertTrue(Files.exists(clips.get(1)), "kept: the paused job needs it");
         assertEquals(List.of(clips.get(1).toAbsolutePath().toString()), job.getKeptSources());
@@ -376,7 +424,7 @@ class SegmentedEncoderTest {
         JobQueue q = queue(new Noop());
         q.submit(List.of(job));
         assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
-        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals(JobState.DONE, job.getState(), job.getErrorKey() + " " + job.getErrorArgs() + " " + job.getErrorDetail());
         assertTrue(job.getCompress().getSegments().stream()
                 .allMatch(s -> s.getLocalStartMs() + s.durationMs() <= sources.get(s.getInput()).durationMs()),
                 "segments never cross sources");
@@ -491,7 +539,7 @@ class SegmentedEncoderTest {
         JobQueue q = queue(new Noop());
         q.submit(List.of(job));
         assertTrue(q.awaitIdle(Duration.ofMinutes(3)));
-        assertEquals(JobState.DONE, job.getState(), String.valueOf(job.getErrorDetail()));
+        assertEquals(JobState.DONE, job.getState(), job.getErrorKey() + " " + job.getErrorArgs() + " " + job.getErrorDetail());
         assertEquals(FRAMES, frames(Path.of(job.output())));
         // keep a frame 12 s in (third segment) for visual inspection: it must read 2026-11-01 23:39:45
         Path frame = Path.of(System.getProperty("user.dir")).getParent().resolve("test-output").resolve("overlay-12s.png");

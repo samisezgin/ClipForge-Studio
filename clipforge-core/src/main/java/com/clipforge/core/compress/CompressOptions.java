@@ -15,9 +15,23 @@ import java.util.Locale;
  * @param overlayTime    burn the recording date and time into the picture
  * @param speed          playback speed-up factor ({@link #MIN_SPEED} - {@link #MAX_SPEED}); 1 = normal speed. The
  *                       output is {@code speed} times shorter; the frame rate stays that of the source.
- */
+ * @param hide           blur licence plates and/or faces; {@code null} = nothing is hidden
+ */ 
 public record CompressOptions(EncoderProfile profile, int quality, int segmentSeconds, int concurrency,
-                              AudioMode audio, MusicSettings music, boolean overlayTime, double speed) {
+                              AudioMode audio, MusicSettings music, boolean overlayTime, double speed,
+                              Hide hide) {
+
+    /** What to hide (blur) in the picture. */
+    public record Hide(boolean plates, boolean faces) {
+        public boolean any() {
+            return plates || faces;
+        }
+    }
+
+    public CompressOptions(EncoderProfile profile, int quality, int segmentSeconds, int concurrency, AudioMode audio,
+                           MusicSettings music, boolean overlayTime, double speed) {
+        this(profile, quality, segmentSeconds, concurrency, audio, music, overlayTime, speed, null);
+    }
 
     public static final double MIN_SPEED = 1;
     public static final double MAX_SPEED = 100; // FFmpeg's atempo limit
@@ -42,11 +56,20 @@ public record CompressOptions(EncoderProfile profile, int quality, int segmentSe
     }
 
     public CompressOptions withAudio(AudioMode mode, MusicSettings m) {
-        return new CompressOptions(profile, quality, segmentSeconds, concurrency, mode, m, overlayTime, speed);
+        return new CompressOptions(profile, quality, segmentSeconds, concurrency, mode, m, overlayTime, speed, hide);
     }
 
     public CompressOptions withSpeed(double factor) {
-        return new CompressOptions(profile, quality, segmentSeconds, concurrency, audio, music, overlayTime, factor);
+        return new CompressOptions(profile, quality, segmentSeconds, concurrency, audio, music, overlayTime, factor, hide);
+    }
+
+    public CompressOptions withHide(Hide h) {
+        return new CompressOptions(profile, quality, segmentSeconds, concurrency, audio, music, overlayTime, speed,
+                h == null || !h.any() ? null : h);
+    }
+
+    public boolean hides() {
+        return hide != null && hide.any();
     }
 
     public boolean spedUp() {
