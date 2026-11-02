@@ -15,6 +15,7 @@ each development phase is a minor release.
 
 ### Changed
 - The packaged app includes ONNX Runtime (CPU); the detection models are downloaded, not bundled.
+- Lombok (compile time only) generates the getters and setters of the project-file classes.
 
 ## [1.2.0] - 2026-11-03
 ### Added

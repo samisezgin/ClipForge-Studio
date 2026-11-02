@@ -8,6 +8,7 @@ module com.clipforge.core {
     requires com.fasterxml.jackson.datatype.jsr310;
     requires java.net.http;
     requires com.microsoft.onnxruntime;
+    requires static lombok; // compile time only
 
     exports com.clipforge.core;
     exports com.clipforge.core.anonymize;
