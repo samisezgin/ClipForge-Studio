@@ -463,13 +463,19 @@ public final class AppController {
 
     private void applyScan(int generation, List<Clip> scanned, List<Session> scannedSessions) {
         scanning.set(false);
-        // outputs of this project's jobs (e.g. output folder = source folder) are never offered as new clips
-        java.util.Set<Path> outputs;
+        // outputs still being written by this project's jobs are hidden; finished outputs are listed (they can be
+        // compressed next) but never selected automatically, so they do not slip into the next merge
+        java.util.Set<Path> unfinishedOutputs;
+        java.util.Set<Path> finishedOutputs;
         synchronized (project) {
-            outputs = project.getJobs().stream().filter(j -> j.output() != null).map(j -> Path.of(j.output()))
-                    .collect(java.util.stream.Collectors.toSet());
+            unfinishedOutputs = project.getJobs().stream()
+                    .filter(j -> j.output() != null && j.getState().unfinished())
+                    .map(j -> Path.of(j.output())).collect(java.util.stream.Collectors.toSet());
+            finishedOutputs = project.getJobs().stream()
+                    .filter(j -> j.output() != null && !j.getState().unfinished())
+                    .map(j -> Path.of(j.output())).collect(java.util.stream.Collectors.toSet());
         }
-        List<Clip> clips = scanned.stream().filter(c -> !outputs.contains(c.path())).toList();
+        List<Clip> clips = scanned.stream().filter(c -> !unfinishedOutputs.contains(c.path())).toList();
         List<Session> grouped = clips.size() == scanned.size() ? scannedSessions
                 : new SessionGrouper(SessionGrouper.DEFAULT_TOLERANCE).group(clips);
         if (generation != scanGeneration) {
@@ -485,7 +491,7 @@ public final class AppController {
             String key = c.path().toString();
             boolean isNew;
             synchronized (project) {
-                isNew = c.selectable() && project.getSeenClips().add(key);
+                isNew = c.selectable() && project.getSeenClips().add(key) && !finishedOutputs.contains(c.path());
             }
             if (isNew) {
                 selected.add(c.path()); // newly found ready clips are selected by default
