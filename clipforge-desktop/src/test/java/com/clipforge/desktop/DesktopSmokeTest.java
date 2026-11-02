@@ -14,8 +14,10 @@ import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.SplitPane;
 import javafx.scene.control.TabPane;
 import javafx.scene.image.WritableImage;
+import javafx.scene.layout.Region;
 import javafx.stage.Stage;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -190,6 +192,21 @@ class DesktopSmokeTest {
             });
             stageRef[0] = musicStage;
             snapshot(stageRef[0], OUT.resolve("ui-steps-en.png")); // steps panel at the top of the side panel
+            onFx(() -> {
+                // dragging the divider far right must not make the side panel narrower than its content
+                var split = (SplitPane) stageRef[0].getScene().lookup(".split-pane");
+                split.setDividerPositions(0.99);
+                return null;
+            });
+            Thread.sleep(300);
+            onFx(() -> {
+                var side = sideScroll(stageRef[0]);
+                var content = (Region) side.getContent();
+                assertTrue(side.getMinWidth() > 320, "min width from content: " + side.getMinWidth());
+                assertTrue(side.getWidth() >= side.getMinWidth() - 1, side.getWidth() + " < " + side.getMinWidth());
+                assertTrue(content.getWidth() >= content.minWidth(-1) - 1, "content fits without sideways scrolling");
+                return null;
+            });
             onFx(() -> {
                 var tabs = (TabPane) stageRef[0].getScene().lookup(".tab-pane");
                 tabs.getSelectionModel().select(1); // speed up

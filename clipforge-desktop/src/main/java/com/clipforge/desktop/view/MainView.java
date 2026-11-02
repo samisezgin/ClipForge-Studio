@@ -14,6 +14,7 @@ import javafx.collections.ListChangeListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
@@ -123,7 +124,14 @@ public final class MainView {
         ScrollPane sideScroll = new ScrollPane(side);
         sideScroll.setFitToWidth(true);
         sideScroll.setMinWidth(320);
-        sideScroll.setPrefWidth(360);
+        sideScroll.setPrefWidth(400);
+        // never scroll sideways: the divider cannot make the panel narrower than its content needs
+        sideScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        sideScroll.sceneProperty().addListener((o, a, scene) -> {
+            if (scene != null) {
+                Platform.runLater(() -> sideScroll.setMinWidth(sideMinWidth(side, tabs)));
+            }
+        });
         sideScroll.getStyleClass().addAll("edge-to-edge", "side-panel");
         SplitPane split = new SplitPane(tree, sideScroll);
         split.setDividerPositions(0.7);
@@ -142,6 +150,22 @@ public final class MainView {
                     ? Messages.get("project.untitled") : f.getFileName().toString();
             return Messages.get("window.title", name, ClipForge.NAME);
         }, controller.projectFileProperty(), controller.untitledProperty()));
+    }
+
+    /**
+     * Width the side panel needs: its content's minimum, but at least room for all tab headers (otherwise the
+     * last tab hides behind an overflow menu), plus the vertical scroll bar. Depends on the language.
+     */
+    private static double sideMinWidth(VBox side, TabPane tabs) {
+        side.applyCss();
+        side.layout();
+        double headers = 0;
+        for (Node tab : tabs.lookupAll(".tab")) {
+            headers += tab.prefWidth(-1);
+        }
+        Insets pad = side.getPadding();
+        double content = Math.max(side.minWidth(-1), headers + 16 + pad.getLeft() + pad.getRight());
+        return Math.ceil(content + 16); // vertical scroll bar
     }
 
     // ---------------------------------------------------------------- menus & toolbar
