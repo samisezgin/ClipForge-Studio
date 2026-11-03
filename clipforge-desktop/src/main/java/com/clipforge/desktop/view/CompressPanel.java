@@ -26,6 +26,7 @@ import javafx.scene.layout.VBox;
 import javafx.util.StringConverter;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -254,7 +255,7 @@ public final class CompressPanel extends TabContent {
                 // a custom button cell hides the ComboBox prompt, so show it here
                 setText(owner == null ? null : owner.getPromptText());
             } else {
-                setText(Messages.get("encoder." + p.name().toLowerCase()));
+                setText(Messages.get("encoder." + p.name().toLowerCase(Locale.ROOT)));
             }
         }
     }

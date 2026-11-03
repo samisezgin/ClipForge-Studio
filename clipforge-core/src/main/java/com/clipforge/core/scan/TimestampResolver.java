@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -99,7 +100,7 @@ public final class TimestampResolver {
     }
 
     private static String upper(String s) {
-        return s == null ? null : s.toUpperCase();
+        return s == null ? null : s.toUpperCase(Locale.ROOT);
     }
 
     private static String stripExtension(String name) {

@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.Locale;
 
 /**
  * Reads and writes {@code .cfproj} files (JSON). Saving is crash safe: the content is written and flushed to a
@@ -78,6 +79,6 @@ public final class ProjectStore {
     /** Adds the {@code .cfproj} extension if missing. */
     public static Path withExtension(Path file) {
         String n = file.getFileName().toString();
-        return n.toLowerCase().endsWith("." + EXTENSION) ? file : file.resolveSibling(n + "." + EXTENSION);
+        return n.toLowerCase(Locale.ROOT).endsWith("." + EXTENSION) ? file : file.resolveSibling(n + "." + EXTENSION);
     }
 }

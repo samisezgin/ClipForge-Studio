@@ -9,6 +9,7 @@ import com.clipforge.core.ffmpeg.CancellationToken;
 import com.clipforge.core.ffmpeg.FfmpegProcess;
 import com.clipforge.core.ffmpeg.FfmpegResult;
 import com.clipforge.core.ffmpeg.FfmpegTools;
+import com.clipforge.core.ffmpeg.HardwareDecode;
 import com.clipforge.core.ffmpeg.Progress;
 import com.clipforge.core.job.JobContext;
 import com.clipforge.core.job.JobExecutor;
@@ -527,6 +528,8 @@ public final class SegmentedEncoder implements JobExecutor {
             return new FfmpegResult(1, false, List.of("The detection models are not installed"));
         }
         List<String> dec = new ArrayList<>(List.of(decode.getFirst(), "-hide_banner", "-nostats", "-loglevel", "error"));
+        // the frames come back to main memory anyway: decode on the GPU (NVDEC, D3D11VA for AMD/Intel) when it works
+        dec.addAll(HardwareDecode.args(tools));
         dec.addAll(decode.subList(1, decode.size()));
         dec.addAll(List.of("-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"));
         List<String> enc = new ArrayList<>(List.of(decode.getFirst(), "-hide_banner", "-nostats", "-loglevel", "error",

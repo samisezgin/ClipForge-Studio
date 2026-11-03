@@ -37,6 +37,26 @@ final class ProcessCapture {
         }
     }
 
+    /** Like {@link #run}, but the returned text is stderr (FFmpeg reports there what went wrong). */
+    static Output runWithStderr(List<String> command, Duration timeout) throws IOException {
+        Process p = new ProcessBuilder(command).start();
+        p.getOutputStream().close();
+        CompletableFuture<byte[]> out = CompletableFuture.supplyAsync(() -> readAll(p.getInputStream()));
+        CompletableFuture<byte[]> err = CompletableFuture.supplyAsync(() -> readAll(p.getErrorStream()));
+        try {
+            if (!p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                p.destroyForcibly();
+                return new Output(-1, "");
+            }
+            out.join();
+            return new Output(p.exitValue(), new String(err.join(), StandardCharsets.UTF_8));
+        } catch (InterruptedException e) {
+            p.destroyForcibly();
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted", e);
+        }
+    }
+
     private static byte[] readAll(InputStream in) {
         try (in) {
             return in.readAllBytes();

@@ -32,6 +32,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /** Job queue with per-job progress and queue controls (pause / stop now / resume). */
 public final class JobsView extends VBox {
@@ -135,7 +136,7 @@ public final class JobsView extends VBox {
             // the growing output can be watched while compressing (video only until the final mux)
             Path growing = OutputNaming.partOf(out);
             JobState s = job.getState();
-            state.setText(Messages.get("jobs.state." + s.name().toLowerCase()));
+            state.setText(Messages.get("jobs.state." + s.name().toLowerCase(Locale.ROOT)));
             state.getStyleClass().removeAll(Styles.SUCCESS, Styles.DANGER, Styles.WARNING, Styles.ACCENT);
             state.getStyleClass().add(switch (s) {
                 case DONE -> Styles.SUCCESS;

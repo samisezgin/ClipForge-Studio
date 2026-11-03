@@ -298,8 +298,9 @@ public final class JobQueue {
                 job.fail("error.io", null, String.valueOf(e.getMessage()));
             }
             outcome = JobExecutor.Outcome.FAILED;
-        } catch (RuntimeException e) {
-            // a broken record (e.g. hand-edited project) must not leave the job RUNNING or kill the worker
+        } catch (RuntimeException | LinkageError e) {
+            // a broken record (e.g. hand-edited project), or classes changed under the running app, must not leave
+            // the job RUNNING or kill the worker: it fails and can be retried
             LOG.log(Level.SEVERE, "Unexpected job failure", e);
             synchronized (project) {
                 job.fail("error.internal", String.valueOf(e), e.getClass().getSimpleName());
